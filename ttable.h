@@ -55,8 +55,8 @@ public:
     }
     void setEval(int staticEval){
         staticEval>>=6;
-        uint64_t scoreConverted = static_cast<uint64_t>(staticEval+0b11111111111111);
-        data2 &= ~(0b11111111111111ull << 50); // Clear the previous value
+        uint64_t scoreConverted = static_cast<uint64_t>(staticEval+4000);
+        data2 &= ~(0b1111111111111ull << 50); // Clear the previous value
         data2 |= scoreConverted << 50;
     }
 
@@ -66,7 +66,7 @@ public:
         return static_cast<int>(((data2 >> 18) & 0xFFFFFFFFull)-MATE_VALUE);
     }
     int getEval() const{
-        return static_cast<int>(((data2 >> 50) & 0b11111111111111ull)-0b11111111111111)<<6;
+        return static_cast<int>(((data2 >> 50) & 0b1111111111111ull)-4000)<<6;
     }
     int getDepth() const {
         return static_cast<int>((data2 >> 2) & 0b111111);
@@ -215,3 +215,51 @@ public:
 
 };
 
+struct PawnEntry {
+    uint64_t key;
+    uint64_t passedPawnsSet;
+    int kingPos[2];
+    int scorePawn[2];
+    float attackersPawn;
+    int atkUnitsPawn;
+    PawnEntry() {
+        key = 0;
+        passedPawnsSet = 0;
+        kingPos[0] = 0;
+        kingPos[1] = 0;
+        scorePawn[0] = 0;
+        scorePawn[1] = 0;
+        attackersPawn = 0.0f;
+        atkUnitsPawn = 0;
+    }
+    void reset() {
+        key = 0;
+        passedPawnsSet = 0;
+        kingPos[0] = 0;
+        kingPos[1] = 0;
+        scorePawn[0] = 0;
+        scorePawn[1] = 0;
+        attackersPawn = 0.0f;
+        atkUnitsPawn = 0;
+    }
+};
+const int PAWN_HASH_SIZE = 0x400;
+const int MASK_PAWN = PAWN_HASH_SIZE - 1;
+PawnEntry pawnEntryDefault = PawnEntry();
+class PawnHashTable {
+private:
+    PawnEntry arrEntry[PAWN_HASH_SIZE];
+public:
+    PawnEntry find(uint64_t orgKey,int kingPos1,int kingPos2) const {
+        uint64_t key = orgKey & MASK_PAWN;
+        if (arrEntry[key].key == orgKey)
+            return arrEntry[key];
+        return pawnEntryDefault;
+    }
+    PawnEntry& find(uint64_t orgKey) {
+        return arrEntry[orgKey & MASK_PAWN];
+    }
+    void set(uint64_t orgKey,PawnEntry& entry) {
+        arrEntry[orgKey & MASK_PAWN] = entry;
+    }
+};
