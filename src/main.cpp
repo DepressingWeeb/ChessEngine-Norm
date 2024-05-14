@@ -2875,27 +2875,7 @@ bool BitBoard::SEE_GE(Move m, int threshold) {
 
 int BitBoard::evaluate(int alpha, int beta) {
     uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
-    int nPieces = popcount64(occupied);
-    if (nPieces == 2) {
-        return 0;
-    }
-    else if (nPieces == 3) {
-        uint64_t drawPieces = pieceBB[Side::White][Piece::knight] | pieceBB[Side::White][Piece::bishop] | pieceBB[Side::Black][Piece::knight] | pieceBB[Side::Black][Piece::bishop];
-        if (drawPieces) {
-            return 0;
-        }
-    }
-    else if (nPieces == 4) {
-        if (pieceBB[Side::White][Piece::bishop] && pieceBB[Side::Black][Piece::bishop]) {
-            return 0;
-        }
-        if ((pieceBB[Side::White][Piece::rook] && pieceBB[Side::Black][Piece::bishop]) || (pieceBB[Side::Black][Piece::rook] && pieceBB[Side::White][Piece::bishop])) {
-            return 0;
-        }
-        if ((pieceBB[Side::White][Piece::bishop] && pieceBB[Side::Black][Piece::knight]) || (pieceBB[Side::Black][Piece::bishop] && pieceBB[Side::White][Piece::knight])) {
-            return 0;
-        }
-    }
+    
     int who2move = (isWhiteTurn ? 1 : -1);
     /*
     //Material for lazy eval
@@ -2913,6 +2893,21 @@ int BitBoard::evaluate(int alpha, int beta) {
     */
 
     int totalOcc = popcount64((pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]));
+    if (totalOcc <= 6 && (pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) == 0) {
+        int diffQueens = static_cast<int>(popcount64(pieceBB[Side::White][Piece::queen]) - popcount64(pieceBB[Side::Black][Piece::queen]))
+            * pieceValue[Piece::queen];
+        int diffRooks = static_cast<int>(popcount64(pieceBB[Side::White][Piece::rook]) - popcount64(pieceBB[Side::Black][Piece::rook]))
+            * pieceValue[Piece::rook];
+        int diffKnights = static_cast<int>(popcount64(pieceBB[Side::White][Piece::knight]) - popcount64(pieceBB[Side::Black][Piece::knight]))
+            * pieceValue[Piece::knight];
+        int diffBishops = static_cast<int>(popcount64(pieceBB[Side::White][Piece::bishop]) - popcount64(pieceBB[Side::Black][Piece::bishop]))
+            * pieceValue[Piece::bishop];
+        int diffMaterial = diffQueens + diffRooks + diffKnights + diffBishops;
+        if ((pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0) {
+            if (abs(diffMaterial) <= 300)
+                return 0;
+        }
+    }
 
     int score[2]{ 0 };
     int phase = TOTAL_PHASE;
@@ -3429,10 +3424,8 @@ std::string finalBestMove;
 class ChessEngine {
 protected:
     bool startWithDefaultPosition;
-
     std::vector<Move> moveHistory;
     std::vector<uint64_t> hashMoveHistory;
-
     Move killerMoves[64][2];
     int historyTable[2][7][64];
     int mainNodeCnt = 0;
@@ -4096,22 +4089,8 @@ int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int 
 
                     continue;
                 }
-                /*
-                if (futilityBase > alpha && !bb.SEE_GE(moves[i], ((alpha - futilityBase) * 4))/100)
-                {
-                    bestScore = alpha;
-                    continue;
-                }
-                */
             }
         }
-        /*
-        if ((pieceValue[moves[i].getMovePiece()] - pieceValue[moves[i].getCapturePiece()] <= 200&& type==MoveType::CAPTURE) || type==MoveType::PROMOTION_QUEEN || type==MoveType::PROMOTION_QUEEN_AND_CAPTURE) {
-            bb.move(moves[i]);
-            score = -qSearch(bb, -beta, -alpha);
-            bb.undoMove(moves[i]);
-        }
-        */
 
         bb.move(moves[i]);
         score = -qSearch(bb, -beta, -alpha, endPos, pliesFromLeaf + 1);
@@ -4150,7 +4129,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     bool isFoundInTable = entry != nullptr;
     NodeFlag expectedNode = NodeFlag::ALLNODE;
     int entryDepth = 0;
-    int entryScore = 0;
+    int entryScore = -2e9;
     int entryEval = 0;
     if (isFoundInTable) {
         entryDepth = entry->getDepth();
@@ -4230,7 +4209,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     */
     NodeFlag flag = NodeFlag::ALLNODE;
     Move currBestMove = potentialBestMove;
-    bool delayedMoveGen = pliesFromRoot >= 1;
+    bool delayedMoveGen = pliesFromRoot>0;
     //Delay move generation: test the best move from previous iteration first
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
     if (!potentialBestMove.isNullMove() && delayedMoveGen && bb.isValidMove(potentialBestMove)) {
@@ -4249,6 +4228,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         else
             isRepeated = true;
         bb.undoMove(potentialBestMove);
+        if (pliesFromRoot == 0&&score>bestScore)
+            bestMove = potentialBestMove.toUci();
         if (score >= beta) {
             if (!isRepeated)
                 ttable->set(zHash, TableEntry(zHash, potentialBestMove, NodeFlag::CUTNODE, depth, score, evalDepthZero));
@@ -4270,6 +4251,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         }
         if (score > bestScore) {
             bestScore = score;
+            
         }
         if (score > alpha) {
             alpha = score;
@@ -4361,7 +4343,13 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     bb.undoMove(moves[i]);
                     break;
                 }
-
+                if (!isPVNode && !isKingInCheck && moveType == MoveType::NORMAL) {
+                    bb.undoMove(moves[i]);
+                    if ( !bb.SEE_GE(moves[i], -17 * lmrDepth * lmrDepth)) {
+                        continue;
+                    }
+                    bb.move(moves[i], zHash);
+                }
                 /*
                 if (moveType == MoveType::CAPTURE) {
                     if (!bb.SEE_GE(moves[i], SEEMargin * depth)) {
@@ -4409,7 +4397,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             isRepeated = true;
         }
         bb.undoMove(moves[i]);
-        if (pliesFromRoot == 0 && score > alpha) {
+        if (pliesFromRoot == 0 && score >bestScore) {
             bestMove = moves[i].toUci();
         }
         if (score >= beta) {
@@ -4498,13 +4486,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
     int prevEval = 1000000000;
 
     uint64_t zHash = bb.getCurrentPositionHash();
-    /*
-    for (int i = 0; i < hashMoveHistory.size() - 1; i++) {
-
-        if(hashMoveHistory[i]!=zHash)
-            transpositionTable[hashMoveHistory[i]] = TableEntry(true);
-    }
-    */
+    ttable->currRootAge = bb.moveNum;
     //std::cout << zHash << std::endl;
     std::string lastBestMove;
     searchStartTime = std::chrono::steady_clock::now();
@@ -4522,7 +4504,6 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
             while (true) {
                 int lowerBound = prevEval - lowerWindow;
                 int upperBound = prevEval + upperWindow;
-                //std::cout << "Start aspiration with window: " << prevEval - lowerWindow << " " << prevEval + upperWindow << std::endl;
                 try
                 {
                     currEval = search(bb, ss, i, i, prevEval - lowerWindow, prevEval + upperWindow, zHash, 0, true);
@@ -4534,7 +4515,6 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
                         break;
                     }
                 }
-                //std::cout << "Eval: " << currEval << std::endl;
                 prevEval = currEval;
 
                 if (currEval >= upperBound) {
@@ -4553,25 +4533,20 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
 
                 //if the windows fail the 4th time,cancel it and do a full window search
                 if (power >= 1) {
-                    upperBound = 2000000000;
-                    lowerBound = -2000000000;
+                    upperBound = 2000000001;
+                    lowerBound = -2000000001;
                 }
 
             }
         }
         //if this is the first iteration,do a full window search
         else {
-            currEval = search(bb, ss, i, i, -2000000000, 2000000000, zHash, 0, true);
+            currEval = search(bb, ss, i, i, -2000000001, 2000000001, zHash, 0, true);
             lastBestMove = bestMove;
         }
-
-        //currEval = search(bb, ss,i, i, -2000000000, 2000000000, zHash, 0, true);
-        //std::cout << "Evaluation engine 1 at depth " << i << " " << ": " << currEval << std::endl;
-        //std::cout << "Bestmove engine 1 at depth " << i << " " << ": " << bestMove << std::endl;
         for (int j = 0; j < 2; j++) {
             for (int k = 0; k < 7; k++) {
                 for (int l = 0; l < 64; l++) {
-                    //std::cout << historyTable[i][j][k] << std::endl;
                     historyTable[j][k][l] /= 8;
                 }
             }
@@ -4584,7 +4559,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         if (maxThreadDepth < i) {
             maxThreadDepth = i;
             finalBestMove = bestMove;
-            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " currmove " << bestMove << std::endl;
+            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " << bestMove << std::endl;
         }
 
         if (duration.count() > time)
@@ -4592,9 +4567,6 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         prevEval = currEval;
 
     }
-    //std::cout << "N move repetition table: " << bb.repetitionTable.a << std::endl;
-    //std::cout << "N undo repetition table: " << bb.repetitionTable.u << std::endl;
-    //std::cout << "Bestmove engine 1 :" << bestMove << std::endl;
     this->currEval = currEval;
     for (int i = 0; i < 32; i++) {
         killerMoves[i][0] = Move();
@@ -4605,74 +4577,9 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         std::cout << "Depth " << i << " Node pruned: " << cnt[i] << std::endl;
     }
     std::cout << "Total node evaluated: " << bb.cntNode << " Pawn hash found: " << bb.cntNode2 << std::endl;
-    /*
-    std::map<int, std::string> pieceMap = {
-        {0,"any"},
-        {1,"pawn"},
-        {2,"knight"},
-        {3,"bishop"},
-        {4,"rook"},
-        {5,"queen"},
-        {6,"king"}
-    };
-    for (int i = 0; i < 2; i++) {
-        for (int j = 0; j < 7; j++) {
-            for (int k = 0; k < 64; k++) {
-                if(historyTable[i][j][k]!=0)
-                    std::cout << historyTable[i][j][k] <<" "<<(i==0?"White ":"Black ")<<pieceMap[j]<<" "<<indexToSquare[k]<< std::endl;
-                historyTable[i][j][k] = 0;
-            }
-        }
-    }
-    */
     nMovesOutOfBook++;
-    for (int i = 0; i < 20; i++) {
-        //std::cout << "Reduction " << i << " equal " << cnt[i] << std::endl;
-    }
-    //retrieve principal variation
-    /*
-    std::cout << std::endl << "Principal variation:" << std::endl;
-    std::vector<TableEntry> v;
-    int maxVariation = 0;
-    while (true) {
-        maxVariation++;
-        if (maxVariation >= 40)
-            break;
-        if (!ttable->find(zHash))
-            break;
-        TableEntry entry = *(ttable->find(zHash));
-        v.push_back(entry);
-        std::cout << entry.getBestMove().toUci() << " " << static_cast<int>(entry.getNodeFlag()) << " " << entry.getScore() << std::endl;
-        Move best = entry.getBestMove();
-        zHash=bb.move(best, zHash);
-    }
-    for (int i = v.size() - 1; i > -1; i--) {
-        Move m = v[i].getBestMove();
-        bb.undoMove(m);
-    }
-    */
-    //std::cout << "Main node count :" << mainNodeCnt << std::endl;
-    //std::cout << "Q node count: " << qNodeCnt << std::endl;
     qNodeCnt = 0;
     mainNodeCnt = 0;
-    //std::cout << cnt[0] << std::endl;
-    /*
-    std::cout << "Main node count :" << mainNodeCnt << std::endl;
-    std::cout << "Q node count: " << qNodeCnt << std::endl;
-    std::cout << "Number of collisions: " << ttable->nCollisions << std::endl;
-    int fill = 0;
-    int fillFull = 0;
-    for (int i = 0; i < TABLE_SIZE; i++) {
-        if (ttable->arrEntry[i][0].zHash != 0)
-            fill++;
-        if (ttable->arrEntry[i][1].zHash != 0)
-            fill++;
-        if (ttable->arrEntry[i][0].zHash != 0 && ttable->arrEntry[i][1].zHash != 0 && ttable->arrEntry[i][2].zHash != 0)
-            fillFull++;
-    }
-    std::cout << "Occupied: " << fill << std::endl;
-    std::cout << "Fully Occupied: " << fillFull << std::endl;
-    */
     return currEval;
 }
 void ChessEngine::runMultithread() {
@@ -4764,6 +4671,7 @@ void testMoveGen() {
     runTest(bb, "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 5, 15833292);
     runTest(bb, "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", 5, 89941194);
     runTest(bb, "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10", 5, 164075551);
+    runTest(bb, "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1", 6, 71179139);
     auto endTime = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
     std::cout << "Run full test costs: " << std::to_string(duration.count()) << std::endl;
