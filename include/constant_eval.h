@@ -28,6 +28,7 @@ const int penaltyBlockedPasserByRank[8] = { 0, S(14, 5), S(2, 2), S(-1, 9), S(3,
 const int bonusConnectedPassedPawn = S(21, 30);
 const int penaltyOpKingCanBlockPasser = S(0, 0);
 const int penaltyAttackedByPawn[2] = {S(40,16),S(110,68)};
+const int penaltyOpenKing = S(5, -2);
 
 const int materialValue[7] = { 0, S(100, 137), S(381, 328), S(385, 381), S(527, 690), S(1142, 1213), 0 };
 const int mobilityValue[7] = { 0, 0, S(8, 13), S(7, 8), S(4, 5), S(1, 9), S(-7, 13) };

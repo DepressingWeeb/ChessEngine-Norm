@@ -265,8 +265,7 @@ public:
 };
 class PlyInfo{
 public:
-    int eval;
-    Move killerMove[2];
+    
 };
 
 class SearchStack {

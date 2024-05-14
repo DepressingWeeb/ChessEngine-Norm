@@ -19,16 +19,19 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
+    <ClInclude Include="include\ChessAI.h" />
+    <ClInclude Include="include\constant_bitboard.h" />
+    <ClInclude Include="include\constant_eval.h" />
+    <ClInclude Include="include\constant_hash.h" />
+    <ClInclude Include="include\constant_search.h" />
+    <ClInclude Include="include\fancy_movegen.h" />
+    <ClInclude Include="include\ttable.h" />
+    <ClInclude Include="include\types.h" />
+    <ClInclude Include="include\utils.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="constant_bitboard.h" />
-    <ClInclude Include="constant_eval.h" />
-    <ClInclude Include="constant_hash.h" />
-    <ClInclude Include="constant_search.h" />
-    <ClInclude Include="ttable.h" />
-    <ClInclude Include="types.h" />
-    <ClInclude Include="utils.h" />
+    <ClCompile Include="src\ChessAI.cpp" />
+    <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
@@ -84,6 +87,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>true</LinkIncremental>
+    <IncludePath>D:\source\repos\ChessAI2\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

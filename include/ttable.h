@@ -14,13 +14,12 @@ public:
         data1 = 0;
         data2 = 0;
     }
-    TableEntry(uint64_t zHash,Move best, NodeFlag flag, int depth, int score,int age,int staticEval) {
+    TableEntry(uint64_t zHash,Move best, NodeFlag flag, int depth, int score,int staticEval) {
         setKey(zHash);
         setBestMove(best);
         setNodeFlag(flag);
         setDepth(depth);
         setScore(score);
-        setAge(age);
         setEval(staticEval);
     }
     bool isValid() {
@@ -48,7 +47,7 @@ public:
         //assert(getScore() == score);
     }
     void setScore(int score) {
-        uint64_t scoreConverted = static_cast<uint64_t>(score + MATE_VALUE);
+        uint64_t scoreConverted = static_cast<uint64_t>(score) + (uint64_t)MATE_VALUE;
         data2 &= ~(0xFFFFFFFFull << 18); // Clear the previous value
         data2 |= scoreConverted << 18;
         //assert(getScore() == score);
@@ -63,7 +62,7 @@ public:
     
 
     int getScore() const {
-        return static_cast<int>(((data2 >> 18) & 0xFFFFFFFFull)-MATE_VALUE);
+        return static_cast<int>(((data2 >> 18ull) & 0xFFFFFFFFull)-MATE_VALUE);
     }
     int getEval() const{
         return static_cast<int>(((data2 >> 50) & 0b1111111111111ull)-4000)<<6;
@@ -119,34 +118,34 @@ public:
 
 class TranspositionTable {
 private:
-    TableEntry arrEntry[TABLE_SIZE][BUCKET_SIZE];
-public:
     
+public:
+    TableEntry arrEntry[TABLE_SIZE][BUCKET_SIZE];
     int nCollisions = 0;
+    int currRootAge = 0;
     TranspositionTable() {  
 
 
     }
-    TableEntry* find(uint64_t zHash,int ithMove) {
+    TableEntry* find(uint64_t zHash) {
         uint64_t key = zHash & MASK_HASH;
-        if (arrEntry[key][0].getHash() == static_cast<uint32_t>(zHash>>32) && ithMove == arrEntry[key][0].getAge()) {
+        if (arrEntry[key][0].getHash() == static_cast<uint32_t>(zHash>>32) ) {
             return &arrEntry[key][0];
         }
-        else if (arrEntry[key][1].getHash() == static_cast<uint32_t>(zHash >> 32) && ithMove == arrEntry[key][1].getAge()) {
+        else if (arrEntry[key][1].getHash() == static_cast<uint32_t>(zHash >> 32)) {
             return &arrEntry[key][1];
         }
-        else if (arrEntry[key][2].getHash() == static_cast<uint32_t>(zHash >> 32) && ithMove == arrEntry[key][2].getAge()) {
+        else if (arrEntry[key][2].getHash() == static_cast<uint32_t>(zHash >> 32)) {
             return &arrEntry[key][2];
         }
         return nullptr;
     }
     void set(uint64_t zHash, TableEntry t) {
         uint64_t key = zHash & MASK_HASH;
-        //if (zHash != arrEntry[key][0].zHash && zHash != arrEntry[key][1].zHash && zHash != arrEntry[key][2].zHash&& arrEntry[key][2].zHash!=0)
-            //nCollisions++;
         arrEntry[key][2] = arrEntry[key][1];
         arrEntry[key][1] = arrEntry[key][0];
         arrEntry[key][0] = t;
+        
     }
 };
 
