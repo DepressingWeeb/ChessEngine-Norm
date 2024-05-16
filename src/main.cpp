@@ -42,14 +42,6 @@ inline int popcount64(uint64_t x) {
 #endif
 }
 
-/*
-//BitScanForward : Search the mask data from least significant bit (LSB) to the most significant bit (MSB) for a set bit (1)
-inline int BitScanForward64(uint64_t x) {
-    unsigned long index = 0;
-    _BitScanForward64(&index,x);
-    return index;
-}
-*/
 
 const int pieceValue[7] = {
     1,
@@ -60,25 +52,6 @@ const int pieceValue[7] = {
     900,
     10000
 };
-struct Trace
-{
-    int score;
-
-    int material[7][2]{};
-    int mobilities[7][2]{};
-    int king_attacks[100][2]{};
-    int passers[8][2]{};
-    int open_files_penalty[4][2]{};
-    int semi_open_files_penalty[4][2]{};
-    int pawn_doubled_penalty[2]{};
-    int pawn_isolated_penalty[2]{};
-    int pawn_passed_protected[2]{};
-    int bishop_pair[2]{};
-    int king_shield[2]{};
-    int tropism_factor[2]{};
-};
-#define TraceIncr(parameter) trace.parameter[side]++
-#define TraceAdd(parameter, count) trace.parameter[side] += count
 class BitBoard {
 private:
     int halfMoves;
@@ -132,18 +105,6 @@ public:
         a8, b8, c8, d8, e8, f8, g8, h8
     };
 
-
-
-    int bonusOpKingCornerEndgame[64] = {
-        50, 45, 45, 45, 45, 45, 45, 50,
-        40, 35, 35, 35, 35, 35, 35, 45,
-        40, 35, 20, 20, 20, 20, 35, 45,
-        40, 35, 20,  0,  0, 20, 35, 45,
-        40, 35, 20,  0,  0, 20, 35, 45,
-        40, 35, 20, 20, 20, 20, 35, 45,
-        40, 35, 35, 35, 35, 35, 35, 45,
-        50, 45, 45, 45, 45, 45, 45, 50
-    };
     int arrCenterManhattanDistance[64] = { // char is sufficient as well, also unsigned
     6, 5, 4, 3, 3, 4, 5, 6,
     5, 4, 3, 2, 2, 3, 4, 5,
@@ -264,9 +225,7 @@ public:
     void undoMove(Move& move);
     std::vector<Move> getLegalMoves();
     void getLegalMovesAlt(MoveVector& ans);
-    std::vector<Move> getLegalCaptures();
     void getLegalCapturesAlt(MoveVector& ans);
-    std::vector<Move> getPseudoLegalMoves();
 
     uint64_t getKnightAttackSquares(int knightPos);
     uint64_t getPawnAttackSquares(Side side, int pawnPos);
@@ -278,11 +237,9 @@ public:
     uint64_t getPinnedPiece(uint64_t occupied, int pos, Side side);
     uint64_t getAllAttackSquares(Side side);
     uint64_t getSingleCheckInterposingSquares(uint64_t occupied, int kingPos, Side side);
-    bool isInsufficientMaterial();
     bool isValidMove(Move& move);
     bool SEE_GE(Move m, int threashold);
     int evaluate(int alpha, int beta);
-    Trace evaluate2();
     int posToRank(int pos) {
         return pos / 8;
     }
@@ -293,7 +250,6 @@ public:
     int rowColToPos(int row, int col);
     int isSquareAttacked(uint64_t occupied, int pos, Side side);
     uint64_t getAttackersOfSq(uint64_t occupied, int pos);
-    bool isLegalMove(Move move, int checks, bool isAbsolutePinned, Direction pinnedDir, uint64_t opAttackSquares, uint64_t canInterposingSquares);
     uint64_t getCurrentPositionHash();
     uint64_t getMaskOfRank(int rank) {
         return 0x00000000000000FFull << (8 * rank);
@@ -302,7 +258,6 @@ public:
         return 0x0101010101010101ull << file;
     }
     void initMagic();
-    int getMobility(Side side, int phaseOpening, int phaseEndgame);
     uint64_t perft(int depth, int maxDepth);
     Direction getDirFromTwoSquares(int pos1, int pos2);
     bool isKingInCheck();
@@ -311,16 +266,6 @@ public:
     }
     bool isConnectedPawn(Side side, int pawnPos) {
         return arrPawnAttacks[!side][pawnPos] & pieceBB[side][Piece::pawn];
-    }
-
-    bool isPromoting() {
-        Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
-        uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
-        return pieceBB[sideToMove][Piece::pawn] & mask7thRank;
-    }
-    bool isPawnNearPromoting(Side sideToMove, int pawnPos) {
-        uint64_t maskRank = sideToMove == Side::White ? 0x00ffff0000000000 : 0x0000000000ffff00;
-        return (1ull << pawnPos) & maskRank;
     }
     bool isEndgame() {
         uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]) & ~(pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn]);
@@ -333,41 +278,6 @@ public:
     bool isKingAndPawnEndgame() {
         return !((pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]) & ~(pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn] | pieceBB[Side::White][Piece::king] | pieceBB[Side::Black][Piece::king]));
     }
-    /*
-    bool giveCheck(Move m) {
-        Piece movePiece = m.getMovePiece();
-        Side side = m.getSideToMove();
-        int endPos = m.getEndPos();
-        int opKingPos = kingPos[!side];
-        uint64_t occupied = pieceBB[side][Piece::any] | pieceBB[!side][Piece::any];
-        switch (movePiece)
-        {
-        case any:
-            break;
-        case pawn:
-            return arrPawnAttacks[side][endPos] & opKingPos;
-            break;
-        case knight:
-            return arrKnightAttacks[endPos] & opKingPos;
-            break;
-        case bishop:
-            return getBishopAttackSquares(occupied, endPos) & opKingPos;
-            break;
-        case rook:
-            return getRookAttackSquares(occupied, endPos) & opKingPos;
-            break;
-        case queen:
-            return (getRookAttackSquares(occupied, endPos) | getBishopAttackSquares(occupied, endPos)) & opKingPos;
-            break;
-        case king:
-            break;
-        default:
-            break;
-        }
-        return false;
-    }
-    */
-    std::vector<std::vector<char>> toPieceTableRepresentation();
 };
 
 BitBoard::BitBoard() {
@@ -383,48 +293,6 @@ int BitBoard::rowColToPos(int row, int col) {
     return row * 8 + col;
 }
 
-std::vector<std::vector<char>> BitBoard::toPieceTableRepresentation() {
-    std::vector<std::vector<char>> res = std::vector<std::vector<char>>(8, std::vector<char>(8, ' '));
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 8; j++) {
-            Side side = Side::White;
-            int idx = ((8 * (7 - i)) + j);
-            if (pieceTable[idx] == Piece::any)
-                continue;
-            else {
-                side = ((1ull << idx) & pieceBB[Side::White][Piece::any]) ? Side::White : Side::Black;
-            }
-            switch (pieceTable[((8 * (7 - i)) + j)])
-            {
-            case Piece::pawn:
-                res[i][j] = side == Side::Black ? 'p' : toupper('p');
-                break;
-            case Piece::bishop:
-                res[i][j] = side == Side::Black ? 'b' : toupper('b');
-                break;
-            case Piece::knight:
-                res[i][j] = side == Side::Black ? 'n' : toupper('n');
-                break;
-            case Piece::rook:
-                res[i][j] = side == Side::Black ? 'r' : toupper('r');
-                break;
-            case Piece::queen:
-                res[i][j] = side == Side::Black ? 'q' : toupper('q');
-                break;
-            case Piece::king:
-                res[i][j] = side == Side::Black ? 'k' : toupper('k');
-                break;
-            case Piece::any:
-                res[i][j] = ' ';
-                break;
-            default:
-                break;
-            }
-        }
-    }
-    return res;
-}
-
 void BitBoard::initMagic() {
     for (int i = 0; i < 64; i++) {
         mBishopTbl[i].magic = magicBishop[i];
@@ -435,7 +303,6 @@ void BitBoard::initMagic() {
         mRookTbl[i].mask = maskRook[i];
         mRookTbl[i].shift = shiftsRook[i];
     }
-    //std::ifstream in(PATH + "data/magicRook.txt");
     for (int i = 0; i < 64; i++) {
         for (int j = 0; j < 4096; j++) {
             arrRookAttacks[i][j] = 0;
@@ -542,7 +409,6 @@ void BitBoard::parseFEN(std::string fen) {
         pieceBB[Side::Black][i] = 0;
     }
     int currPos = 56;
-    //rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
     for (int i = 0; i < v[0].size(); i++) {
         Side pieceSide = islower(v[0][i]) ? Side::Black : Side::White;
         if (v[0][i] == '/') {
@@ -550,7 +416,6 @@ void BitBoard::parseFEN(std::string fen) {
             continue;
         }
         char lowercasePiece = tolower(v[0][i]);
-        //std::cout << currPos << std::endl;
         switch (lowercasePiece)
         {
         case 'r':
@@ -582,7 +447,6 @@ void BitBoard::parseFEN(std::string fen) {
             pieceBB[pieceSide][Piece::king] |= (1ull << currPos);
             pieceBB[pieceSide][Piece::any] |= (1ull << currPos);
             pieceTable[currPos] = Piece::king;
-            //std::cout << currPos << std::endl;
             break;
         default:
             currPos += (v[0][i] - '1');
@@ -629,18 +493,6 @@ void BitBoard::parseFEN(std::string fen) {
     repetitionTable.add(getCurrentPositionHash(), false);
 
 }
-/*
-BitBoard& BitBoard::operator=(const BitBoard& other){
-    if (this == &other) {
-        // Self-assignment, no action needed
-        return *this;
-    }
-    moveNum=other.moveNum;
-    enPassantPos=other.enPassantPos;
-
-
-}
-*/
 void BitBoard::initConstant() {
     //init arrPawnAttcks that contains the attack squres of pawn precomputed
     for (int i = 0; i < 64; i++) {
@@ -862,9 +714,6 @@ int BitBoard::isSquareAttacked(uint64_t occupied, int pos, Side side) {
     uint64_t king = pieceBB[side][Piece::king];
     uint64_t bishopsQueens = pieceBB[side][queen] | pieceBB[side][Piece::bishop];
     uint64_t rooksQueens = pieceBB[side][Piece::queen] | pieceBB[side][Piece::rook];
-    //std::cout << arrPawnAttacks[!side][pos]<<" "<<pawns << " "<<occupied<<" "<<pos<< std::endl;
-    //std::cout << (arrPawnAttacks[!side][pos] & pawns) << std::endl;
-
     return !!(arrPawnAttacks[!side][pos] & pawns) + !!(arrKnightAttacks[pos] & knights) + !!(getBishopAttackSquares(occupied, pos) & bishopsQueens) + !!(getRookAttackSquares(occupied, pos) & rooksQueens);
 }
 
@@ -890,7 +739,6 @@ uint64_t BitBoard::getBishopAttackSquares(uint64_t occ, int pos) {
 }
 
 uint64_t BitBoard::getRookAttackSquares(uint64_t occ, int pos) {
-    //std::cout << pos << " ";
     occ &= mRookTbl[pos].mask;
     occ *= mRookTbl[pos].magic;
     occ >>= 64 - mRookTbl[pos].shift;
@@ -903,24 +751,6 @@ uint64_t BitBoard::getBishopXrayAttackSquares(uint64_t occ, uint64_t blockers, i
     uint64_t blockPieceMask = blockers & bishopAttackSquares;
     uint64_t occWithoutBlockPiece = occ ^ blockPieceMask;
     return bishopAttackSquares ^ getBishopAttackSquares(occWithoutBlockPiece, pos);
-    /*
-    Example: pos = 0
-             occ=                           0
-                                       1
-                                   0
-                               1
-                           0
-                       0
-                   1(bishop pos)
-
-           Output=                         0
-                                       1
-                                   1
-                               0
-                           0
-                       0
-                   0(bishop pos)
-    */
 }
 
 uint64_t BitBoard::getRookXrayAttackSquares(uint64_t occ, uint64_t blockers, int pos) {
@@ -962,7 +792,6 @@ uint64_t BitBoard::getAllAttackSquares(Side side) {
     uint64_t rookQueenBB = pieceBB[side][Piece::rook] | pieceBB[side][Piece::queen];
     while (rookQueenBB) {
         int rookPos = BitScanForward64(rookQueenBB);
-        //std::cout << "Rook pos: " << rookPos << std::endl;
         uint64_t rookAttacks = getRookAttackSquares(occ, rookPos);
         allAttackSquares |= rookAttacks;
         rookQueenBB ^= (1ull << rookPos);
@@ -1021,7 +850,6 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
     moveNum++;
     assert(moveNum >= 0);
     Side sideToMove = move.getSideToMove();
-    //std::cout << "Move make move" << std::endl;
     if (move.isNullMove()) {
         sideToMove = isWhiteTurn ? Side::White : Side::Black;
         move.setSideToMove(sideToMove);
@@ -1264,7 +1092,6 @@ void BitBoard::undoMove(Move& move) {
         repetitionTable.pop();
         return;
     }
-    //std::cout << "Move make move" << std::endl;
     Piece movePiece = move.getMovePiece();
     Piece capturePiece = move.getCapturePiece();
 
@@ -1429,11 +1256,9 @@ std::vector<Move> BitBoard::getLegalMoves() {
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
 
     int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
-    //std::cout << pieceBB[sideToMove][Piece::king] << std::endl;
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
 
     int checks = isSquareAttacked(occupied, kingPos, opSide);
-    //std::cout << "Number of checks: " << checks << std::endl;
     uint64_t opAttackSquares = getAllAttackSquares(opSide);
     std::vector<Move> ans;
     ans.reserve(40);
@@ -1455,8 +1280,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (pawnCaptures) {
                 int capturePos = BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if(!isPinned|| (isPinned && getDirFromTwoSquares(pawnPos,capturePos)==getDirFromTwoSquares(pawnPos,kingPos)))
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_KNIGHT_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -1468,7 +1291,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
                 }
                 pawnCaptures ^= (1ull << capturePos);
             }
-            //TODO: add check promotion,promotionCaptures, en pasasant
             int moveOffset = sideToMove == Side::White ? 8 : -8;
             if (!isPinned || (isPinned && getDirFromTwoSquares(pawnPos, pawnPos + moveOffset) == getDirFromTwoSquares(pawnPos, kingPos))) {
                 if (!(1ull << (pawnPos + moveOffset) & occupied)) {
@@ -1519,7 +1341,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (knightCaptures) {
                 int capturePos = BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
                 knightCaptures ^= (1ull << capturePos);
@@ -1527,7 +1348,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
 
             while (knightNormalMoves) {
                 int movePos = BitScanForward64(knightNormalMoves);
-                //TODO: add move priority
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
             }
@@ -1549,8 +1369,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (bishopCaptures) {
                 int capturePos = BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, capturePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
@@ -1558,8 +1376,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (bishopNormalMoves) {
                 int movePos = BitScanForward64(bishopNormalMoves);
                 bishopNormalMoves ^= (1ull << movePos);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, movePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
             }
@@ -1580,8 +1396,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (rookCaptures) {
                 int capturePos = BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, capturePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
@@ -1589,8 +1403,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (rookNormalMoves) {
                 int movePos = BitScanForward64(rookNormalMoves);
                 rookNormalMoves ^= (1ull << movePos);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, movePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
             }
@@ -1604,14 +1416,13 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
 
             while (kingNormalMoves) {
                 int movePos = BitScanForward64(kingNormalMoves);
-                //TODO: add move priority
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -1635,7 +1446,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
     else if (checks == 1) {
         uint64_t pinnedPiece = getPinnedPiece(occupied, kingPos, sideToMove);
         uint64_t interposingSquares = getSingleCheckInterposingSquares(occupied, kingPos, sideToMove);
-        //std::cout << interposingSquares << std::endl;
         //pawn pseudo legal move
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
@@ -1652,8 +1462,6 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (pawnCaptures) {
                 int capturePos = BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if(!isPinned|| (isPinned && getDirFromTwoSquares(pawnPos,capturePos)==getDirFromTwoSquares(pawnPos,kingPos)))
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_KNIGHT_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -1665,7 +1473,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
                 }
                 pawnCaptures ^= (1ull << capturePos);
             }
-            //TODO: add check promotion,promotionCaptures, en pasasant
+            
             int moveOffset = sideToMove == Side::White ? 8 : -8;
             if (!isPinned || (isPinned && getDirFromTwoSquares(pawnPos, pawnPos + moveOffset) == getDirFromTwoSquares(pawnPos, kingPos))) {
                 //if up 1 square is in interposing squares and the square does not have any piece
@@ -1717,7 +1525,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (knightCaptures) {
                 int capturePos = BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
                 knightCaptures ^= (1ull << capturePos);
@@ -1725,7 +1533,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
 
             while (knightNormalMoves) {
                 int movePos = BitScanForward64(knightNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
             }
@@ -1746,16 +1554,12 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (bishopCaptures) {
                 int capturePos = BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, capturePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
 
             while (bishopNormalMoves) {
                 int movePos = BitScanForward64(bishopNormalMoves);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, movePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, Piece::bishop));
                 bishopNormalMoves ^= (1ull << movePos);
             }
@@ -1775,16 +1579,11 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (rookCaptures) {
                 int capturePos = BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, capturePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
-
             while (rookNormalMoves) {
                 int movePos = BitScanForward64(rookNormalMoves);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, movePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, Piece::rook));
                 rookNormalMoves ^= (1ull << movePos);
             }
@@ -1804,16 +1603,12 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (queenCaptures) {
                 int capturePos = BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(queenPos, capturePos) == getDirFromTwoSquares(queenPos, kingPos)))
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
             }
 
             while (queenNormalMoves) {
                 int movePos = BitScanForward64(queenNormalMoves);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(queenPos, movePos) == getDirFromTwoSquares(queenPos, kingPos)))
                 ans.emplace_back(Move(queenPos, movePos, MoveType::NORMAL, sideToMove, Piece::queen));
                 queenNormalMoves ^= (1ull << movePos);
             }
@@ -1828,14 +1623,14 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
 
             while (kingNormalMoves) {
                 int movePos = BitScanForward64(kingNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -1855,14 +1650,14 @@ std::vector<Move> BitBoard::getLegalMoves() {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
 
             while (kingNormalMoves) {
                 int movePos = BitScanForward64(kingNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -1881,11 +1676,9 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
 
     int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
-    //std::cout << pieceBB[sideToMove][Piece::king] << std::endl;
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
 
     int checks = isSquareAttacked(occupied, kingPos, opSide);
-    //std::cout << "Number of checks: " << checks << std::endl;
     uint64_t opAttackSquares = getAllAttackSquares(opSide);
     if (checks == 0) {
         uint64_t pinnedPiece = getPinnedPiece(occupied, kingPos, sideToMove);
@@ -1905,8 +1698,8 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (pawnCaptures) {
                 int capturePos = BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if(!isPinned|| (isPinned && getDirFromTwoSquares(pawnPos,capturePos)==getDirFromTwoSquares(pawnPos,kingPos)))
+                
+                
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_KNIGHT_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -1918,7 +1711,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
                 }
                 pawnCaptures ^= (1ull << capturePos);
             }
-            //TODO: add check promotion,promotionCaptures, en pasasant
+            
             int moveOffset = sideToMove == Side::White ? 8 : -8;
             if (!isPinned || (isPinned && getDirFromTwoSquares(pawnPos, pawnPos + moveOffset) == getDirFromTwoSquares(pawnPos, kingPos))) {
                 if (!(1ull << (pawnPos + moveOffset) & occupied)) {
@@ -1969,7 +1762,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (knightCaptures) {
                 int capturePos = BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
                 knightCaptures ^= (1ull << capturePos);
@@ -1977,7 +1770,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
 
             while (knightNormalMoves) {
                 int movePos = BitScanForward64(knightNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
             }
@@ -1999,8 +1792,6 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (bishopCaptures) {
                 int capturePos = BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, capturePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
@@ -2008,8 +1799,6 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (bishopNormalMoves) {
                 int movePos = BitScanForward64(bishopNormalMoves);
                 bishopNormalMoves ^= (1ull << movePos);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, movePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
             }
@@ -2030,8 +1819,6 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (rookCaptures) {
                 int capturePos = BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, capturePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
@@ -2039,8 +1826,6 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (rookNormalMoves) {
                 int movePos = BitScanForward64(rookNormalMoves);
                 rookNormalMoves ^= (1ull << movePos);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, movePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
             }
@@ -2054,14 +1839,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
 
             while (kingNormalMoves) {
                 int movePos = BitScanForward64(kingNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -2085,7 +1870,6 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
     else if (checks == 1) {
         uint64_t pinnedPiece = getPinnedPiece(occupied, kingPos, sideToMove);
         uint64_t interposingSquares = getSingleCheckInterposingSquares(occupied, kingPos, sideToMove);
-        //std::cout << interposingSquares << std::endl;
         //pawn pseudo legal move
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
@@ -2102,8 +1886,6 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (pawnCaptures) {
                 int capturePos = BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if(!isPinned|| (isPinned && getDirFromTwoSquares(pawnPos,capturePos)==getDirFromTwoSquares(pawnPos,kingPos)))
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_KNIGHT_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -2115,7 +1897,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
                 }
                 pawnCaptures ^= (1ull << capturePos);
             }
-            //TODO: add check promotion,promotionCaptures, en pasasant
+            
             int moveOffset = sideToMove == Side::White ? 8 : -8;
             if (!isPinned || (isPinned && getDirFromTwoSquares(pawnPos, pawnPos + moveOffset) == getDirFromTwoSquares(pawnPos, kingPos))) {
                 //if up 1 square is in interposing squares and the square does not have any piece
@@ -2167,7 +1949,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (knightCaptures) {
                 int capturePos = BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
                 knightCaptures ^= (1ull << capturePos);
@@ -2175,7 +1957,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
 
             while (knightNormalMoves) {
                 int movePos = BitScanForward64(knightNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
             }
@@ -2196,16 +1978,12 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (bishopCaptures) {
                 int capturePos = BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, capturePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
 
             while (bishopNormalMoves) {
                 int movePos = BitScanForward64(bishopNormalMoves);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, movePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, Piece::bishop));
                 bishopNormalMoves ^= (1ull << movePos);
             }
@@ -2225,16 +2003,12 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (rookCaptures) {
                 int capturePos = BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, capturePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
 
             while (rookNormalMoves) {
                 int movePos = BitScanForward64(rookNormalMoves);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, movePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, Piece::rook));
                 rookNormalMoves ^= (1ull << movePos);
             }
@@ -2254,16 +2028,12 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (queenCaptures) {
                 int capturePos = BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(queenPos, capturePos) == getDirFromTwoSquares(queenPos, kingPos)))
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
             }
 
             while (queenNormalMoves) {
                 int movePos = BitScanForward64(queenNormalMoves);
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(queenPos, movePos) == getDirFromTwoSquares(queenPos, kingPos)))
                 ans.emplace_back(Move(queenPos, movePos, MoveType::NORMAL, sideToMove, Piece::queen));
                 queenNormalMoves ^= (1ull << movePos);
             }
@@ -2278,14 +2048,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
 
             while (kingNormalMoves) {
                 int movePos = BitScanForward64(kingNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -2305,14 +2075,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
 
             while (kingNormalMoves) {
                 int movePos = BitScanForward64(kingNormalMoves);
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -2321,19 +2091,16 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
     }
     //For move-ordering
 }
-std::vector<Move> BitBoard::getLegalCaptures() {
+void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
+    ans.reset();
     Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
 
     int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
-    //std::cout << pieceBB[sideToMove][Piece::king] << std::endl;
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
 
     int checks = isSquareAttacked(occupied, kingPos, opSide);
-    //std::cout << "Number of checks: " << checks << std::endl;
     uint64_t opAttackSquares = getAllAttackSquares(opSide);
-    std::vector<Move> ans;
-    ans.reserve(12);
     if (checks == 0) {
         uint64_t pinnedPiece = getPinnedPiece(occupied, kingPos, sideToMove);
         //pawn pseudo legal move
@@ -2353,8 +2120,8 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (pawnCaptures) {
                 int capturePos = BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if(!isPinned|| (isPinned && getDirFromTwoSquares(pawnPos,capturePos)==getDirFromTwoSquares(pawnPos,kingPos)))
+                
+                
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_KNIGHT_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -2366,7 +2133,7 @@ std::vector<Move> BitBoard::getLegalCaptures() {
                 }
                 pawnCaptures ^= (1ull << capturePos);
             }
-            //TODO: add check promotion,promotionCaptures, en pasasant
+            
 
             if (isPromotion && (!isPinned || (isPinned && getDirFromTwoSquares(pawnPos, pawnPos + moveOffset) == getDirFromTwoSquares(pawnPos, kingPos)))) {
                 if (!(1ull << (pawnPos + moveOffset) & occupied)) {
@@ -2409,7 +2176,7 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (knightCaptures) {
                 int capturePos = BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
                 knightCaptures ^= (1ull << capturePos);
@@ -2430,8 +2197,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (bishopCaptures) {
                 int capturePos = BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, capturePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
@@ -2450,8 +2215,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (rookCaptures) {
                 int capturePos = BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, capturePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
@@ -2470,8 +2233,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (queenCaptures) {
                 int capturePos = BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(queenPos, capturePos) == getDirFromTwoSquares(queenPos, kingPos)))
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
             }
@@ -2483,8 +2244,7 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
-                Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                Piece capturePiece = pieceTable[capturePos];      
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
@@ -2495,7 +2255,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
     else if (checks == 1) {
         uint64_t pinnedPiece = getPinnedPiece(occupied, kingPos, sideToMove);
         uint64_t interposingSquares = getSingleCheckInterposingSquares(occupied, kingPos, sideToMove);
-        //std::cout << interposingSquares << std::endl;
         //pawn pseudo legal move
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
@@ -2513,8 +2272,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (pawnCaptures) {
                 int capturePos = BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if(!isPinned|| (isPinned && getDirFromTwoSquares(pawnPos,capturePos)==getDirFromTwoSquares(pawnPos,kingPos)))
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_KNIGHT_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -2526,7 +2283,7 @@ std::vector<Move> BitBoard::getLegalCaptures() {
                 }
                 pawnCaptures ^= (1ull << capturePos);
             }
-            //TODO: add check promotion,promotionCaptures, en pasasant
+            
 
             if (isPromotion && (!isPinned || (isPinned && getDirFromTwoSquares(pawnPos, pawnPos + moveOffset) == getDirFromTwoSquares(pawnPos, kingPos)))) {
                 //if up 1 square is in interposing squares and the square does not have any piece
@@ -2569,7 +2326,7 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (knightCaptures) {
                 int capturePos = BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
                 knightCaptures ^= (1ull << capturePos);
@@ -2590,8 +2347,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (bishopCaptures) {
                 int capturePos = BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(bishopPos, capturePos) == getDirFromTwoSquares(bishopPos, kingPos)))
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
@@ -2610,8 +2365,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (rookCaptures) {
                 int capturePos = BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(rookPos, capturePos) == getDirFromTwoSquares(rookPos, kingPos)))
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
@@ -2630,8 +2383,6 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (queenCaptures) {
                 int capturePos = BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
-                //if (!isPinned || (isPinned && getDirFromTwoSquares(queenPos, capturePos) == getDirFromTwoSquares(queenPos, kingPos)))
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
             }
@@ -2645,7 +2396,7 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
@@ -2664,22 +2415,18 @@ std::vector<Move> BitBoard::getLegalCaptures() {
             while (kingCaptures) {
                 int capturePos = BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
-                //TODO: add move priority
+                
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
             }
             kingBB ^= (1ull << kingPos);
         }
     }
-    return ans;
-
 }
-
 bool BitBoard::isKingInCheck() {
     Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
     int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
-    //std::cout << pieceBB[sideToMove][Piece::king] << std::endl;
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
     return isSquareAttacked(occupied, kingPos, opSide);
 }
@@ -2875,23 +2622,8 @@ bool BitBoard::SEE_GE(Move m, int threshold) {
 
 int BitBoard::evaluate(int alpha, int beta) {
     uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
-    
-    int who2move = (isWhiteTurn ? 1 : -1);
-    /*
-    //Material for lazy eval
-    int diffQueens = static_cast<int>(popcount64(pieceBB[Side::White][Piece::queen]) - popcount64(pieceBB[Side::Black][Piece::queen]))
-        * pieceValue[Piece::queen];
-    int diffRooks = static_cast<int>(popcount64(pieceBB[Side::White][Piece::rook]) - popcount64(pieceBB[Side::Black][Piece::rook]))
-        * pieceValue[Piece::rook];
-    int diffKnights = static_cast<int>(popcount64(pieceBB[Side::White][Piece::knight]) - popcount64(pieceBB[Side::Black][Piece::knight]))
-        * pieceValue[Piece::knight];
-    int diffBishops = static_cast<int>(popcount64(pieceBB[Side::White][Piece::bishop]) - popcount64(pieceBB[Side::Black][Piece::bishop]))
-        * pieceValue[Piece::bishop];
-    int diffPawns = static_cast<int>(popcount64(pieceBB[Side::White][Piece::pawn]) - popcount64(pieceBB[Side::Black][Piece::pawn]))
-        * pieceValue[Piece::pawn];
-    int diffMaterial = diffQueens + diffRooks + diffKnights + diffBishops + diffPawns;
-    */
 
+    int who2move = (isWhiteTurn ? 1 : -1);
     int totalOcc = popcount64((pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]));
     if (totalOcc <= 6 && (pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) == 0) {
         int diffQueens = static_cast<int>(popcount64(pieceBB[Side::White][Piece::queen]) - popcount64(pieceBB[Side::Black][Piece::queen]))
@@ -2920,17 +2652,13 @@ int BitBoard::evaluate(int alpha, int beta) {
     int fileKing[2] = { posToFile(kingPos[0]) , posToFile(kingPos[1]) };
     int totalWeightedKingDistToOwnPawn[2]{ 0 };
     int sumOfWeightDist[2]{ 0 };
-
-
-    //float knightValMobility = (static_cast<float>(MobilityOpening::KNIGHT) * phaseOpening + static_cast<float>(MobilityEndgame::KNIGHT) * phaseEndgame);
     int posFlipped = 0;
     uint64_t attacks = 0;
     uint64_t isDoublePawn = false;
     bool isIsolatedPawn = false;
-    bool isOnlyKingAndPawn = isKingAndPawnEndgame();
     Side stm = isWhiteTurn ? Side::White : Side::Black;
-    int mat[2] = { 1,1 };
     uint64_t pawnSet = pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn];
+
     for (int side = 0; side < 2; side++) {
 
         uint64_t occupied2 = pieceBB[side][Piece::any];
@@ -2944,7 +2672,8 @@ int BitBoard::evaluate(int alpha, int beta) {
         int flip = side == Side::White ? 56 : 0;
         uint64_t myPiece = occupied2;
         float nAttackers = 0;
-        float nDefenders = static_cast<float>(popcount64(pieceBB[!side][Piece::pawn] & opKingInnerRing)) * 0.5f + static_cast<float>(popcount64(pieceBB[!side][Piece::pawn] & opKingOuterRing)) * 0.2f;
+        float nDefenders = static_cast<float>(popcount64(pieceBB[!side][Piece::pawn] & opKingInnerRing)) * 0.5f 
+                         + static_cast<float>(popcount64(pieceBB[!side][Piece::pawn] & opKingOuterRing)) * 0.2f;
         uint64_t pieces = pieceBB[!side][Piece::any] ^ pieceBB[!side][Piece::pawn];
         nDefenders += popcount64(pieces & opKingInnerRing) * 1.0f + popcount64(pieces & opKingOuterRing) * 0.5f;
         int totalAtkUnits = 0;
@@ -2953,28 +2682,22 @@ int BitBoard::evaluate(int alpha, int beta) {
         int nDefsOnInnerRing = 0;
         int pawnPushOffset = side == Side::White ? 8 : -8;
         bool sideIsSTM = side == stm;
-        uint64_t opPawnSetAtkSq = side == Side::Black ? (pieceBB[!side][Piece::pawn] << 7ull | pieceBB[!side][Piece::pawn] << 9ull) : (pieceBB[!side][Piece::pawn] >> 7ull | pieceBB[!side][Piece::pawn] >> 9ull);
+        Side opSide = static_cast<Side>(!side);
+        uint64_t opPawnSetAtkSq = side == Side::Black ?
+            (((pieceBB[!side][Piece::pawn] << 7ull) & ~0x8080808080808080ull) | ((pieceBB[!side][Piece::pawn] << 9ull) & ~0x0101010101010101ull)) :
+            (((pieceBB[!side][Piece::pawn] >> 7ull) & ~0x0101010101010101ull) | ((pieceBB[!side][Piece::pawn] >> 9ull) & ~0x8080808080808080ull));
         if (popcount64(pieceBB[side][Piece::bishop]) == 2) {
             score[side] += bishopPairBonus;
         }
         while (occupied2) {
             int pos = BitScanForward64(occupied2);
             occupied2 ^= (1ull << pos);
-            Side opSide = static_cast<Side>(!side);
+            
             Piece piece = pieceTable[pos];
             //Material
             score[side] += materialValue[piece];
 
             posFlipped = pos ^ flip;
-            if (piece >= 2) {
-                //opponent's pawn attack own piece
-                if (arrPawnAttacks[side][pos] & pieceBB[!side][Piece::pawn]) {
-                    if (sideIsSTM)
-                        score[side] -= penaltyAttackedByPawn[0];
-                    else
-                        score[side] -= penaltyAttackedByPawn[1];
-                }
-            }
             switch (piece)
             {
             case any:
@@ -3014,15 +2737,14 @@ int BitBoard::evaluate(int alpha, int beta) {
                 if (isIsolatedPawn) {
                     score[side] -= pawnIsolatedPenalty;
                 }
-
                 score[side] += pawnTable[posFlipped];
-                attacks = arrPawnAttacks[side][Piece::pawn];
+                attacks = arrPawnAttacks[side][pos];
                 nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
                 nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
                 if (nAtksOnInnerRing)
-                    nAttackers += 0.6f;
+                    nAttackers += 0.5f;
                 else if (nAtksOnOuterRing)
-                    nAttackers += 0.3f;
+                    nAttackers += 0.25f;
                 totalAtkUnits += nAtksOnInnerRing * 2 + nAtksOnOuterRing;
             }
             break;
@@ -3055,8 +2777,6 @@ int BitBoard::evaluate(int alpha, int beta) {
             case rook:
                 phase -= 2;
                 score[side] += rookTable[posFlipped];
-                //arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn];
-                //
                 if (!(arrAfterPawn[side][pos] & pawnSet))
                     score[side] += bonusRookOnOpenFile;
                 else if (!(arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn]))
@@ -3097,30 +2817,7 @@ int BitBoard::evaluate(int alpha, int beta) {
         if (nAttackers >= 3) {
             score[side] += SafetyTable[totalAtkUnits] * (nAttackers - nDefenders);
         }
-        /*
-        atkDefsKing[side][0] = nAttackers;
-        atkDefsKing[side][1] = nDefenders;
-        atkDefsKing[side][2] = totalAtkUnits;
-        */
     }
-    /*
-    float chanceAtkWhite = atkDefsKing[Side::White][0] - atkDefsKing[Side::Black][1];
-    float chanceAtkBlack = atkDefsKing[Side::Black][0] - atkDefsKing[Side::White][1];
-    if (chanceAtkWhite > 2) {
-        uint32_t atkBonus = SafetyTable[static_cast<int>(atkDefsKing[Side::White][2])];
-        uint32_t mg = atkBonus & 0xFFFFull;
-        uint32_t eg = (atkBonus ^ mg) >> 16;
-        float scaleAtk = chanceAtkWhite / 4.0f;
-        score[Side::White] += static_cast<int>(static_cast<uint32_t>(static_cast<float>(eg)*scaleAtk) << 16) + static_cast<uint32_t>(static_cast<float>(mg)*scaleAtk);
-    }
-    if (chanceAtkBlack > 2) {
-        uint32_t atkBonus = SafetyTable[static_cast<int>(atkDefsKing[Side::Black][2])];
-        uint32_t mg = atkBonus & 0xFFFFull;
-        uint32_t eg = (atkBonus ^ mg) >> 16;
-        float scaleAtk = chanceAtkBlack / 4.0f;
-        score[Side::Black] += static_cast<int>(static_cast<uint32_t>(static_cast<float>(eg) * scaleAtk) << 16) + static_cast<uint32_t>(static_cast<float>(mg) * scaleAtk);
-    }
-    */
     //king safety-related
     uint64_t pawnsBBAll = pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn];
     for (int side = 0; side < 2; side++) {
@@ -3146,8 +2843,6 @@ int BitBoard::evaluate(int alpha, int beta) {
     }
 
     phase = (phase * 256 + (TOTAL_PHASE / 2)) / TOTAL_PHASE;
-
-    //0: midgame,256:endgame
     if (sumOfWeightDist[0] > 0) {
         score[0] -= static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[0]) / static_cast<float>(sumOfWeightDist[0]))) * kingPawnTropismFactor;
     }
@@ -3178,246 +2873,6 @@ int BitBoard::evaluate(int alpha, int beta) {
 
 }
 
-Trace BitBoard::evaluate2() {
-    Trace trace{};
-    uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
-
-    int totalOcc = popcount64((pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]));
-
-    int score[2]{ 0 };
-    int phase = TOTAL_PHASE;
-    int kingPos[2] = {
-        BitScanForward64(pieceBB[Side::White][Piece::king]),
-        BitScanForward64(pieceBB[Side::Black][Piece::king])
-    };
-    int rankKing[2] = { posToRank(kingPos[0]) , posToRank(kingPos[1]) };
-    int fileKing[2] = { posToFile(kingPos[0]) , posToFile(kingPos[1]) };
-    int totalWeightedKingDistToOwnPawn[2]{ 0 };
-    int sumOfWeightDist[2]{ 0 };
-
-
-    //float knightValMobility = (static_cast<float>(MobilityOpening::KNIGHT) * phaseOpening + static_cast<float>(MobilityEndgame::KNIGHT) * phaseEndgame);
-
-    int pos = 0;
-    int posFlipped = 0;
-    uint64_t attacks = 0;
-    uint64_t isDoublePawn = false;
-    bool isIsolatedPawn = false;
-
-    for (int side = 0; side < 2; side++) {
-
-        uint64_t occupied2 = pieceBB[side][Piece::any];
-        int opKingPos = kingPos[!side];
-        uint64_t opKingInnerRing = getKingAttackSquares(opKingPos);
-        uint64_t opKingOuterRing = arrOuterRing[opKingPos];
-        int flip = side == Side::White ? 56 : 0;
-        uint64_t myPiece = occupied2;
-        float nAttackers = 0;
-        int totalAtkUnits = 0;
-        int nAtksOnInnerRing = 0;
-        int nAtksOnOuterRing = 0;
-
-        if (popcount64(pieceBB[side][Piece::bishop]) == 2) {
-            score[side] += bishopPairBonus;
-            trace.bishop_pair[side]++;
-        }
-
-        while (occupied2) {
-            int pos = BitScanForward64(occupied2);
-            uint64_t maskPos = 1ull << pos;
-            occupied2 ^= maskPos;
-            Side opSide = static_cast<Side>(!side);
-            Piece piece = pieceTable[pos];
-            //Material
-            score[side] += materialValue[piece];
-            trace.material[piece][side]++;
-            //Phase
-            phase -= phases[piece];
-
-            posFlipped = pos ^ flip;
-
-            switch (piece)
-            {
-            case any:
-                break;
-            case pawn:
-            {
-                int rankPawn = posToRank(pos);
-                int filePawn = posToFile(pos);
-                int weight = 3;
-                int manhattanDist = abs(rankKing[side] - rankPawn) + abs(fileKing[side] - filePawn);
-                if (isPassedPawn(static_cast<Side>(side), static_cast<Side>(!side), pos)) {
-                    score[side] += bonusPassedPawnByRank[rankPawn];
-                    trace.passers[rankPawn][side]++;
-                    if (isConnectedPawn(static_cast<Side>(side), pos)) {
-                        score[side] += bonusConnectedPassedPawn;
-                        trace.pawn_passed_protected[side]++;
-                    }
-                    weight = 6;
-                }
-                totalWeightedKingDistToOwnPawn[side] += weight * manhattanDist;
-                sumOfWeightDist[side] += weight;
-
-
-                isDoublePawn = arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn];
-                isIsolatedPawn = !(arrNeighorPawn[pos] & pieceBB[side][Piece::pawn]);
-                if (isDoublePawn) {
-                    score[side] -= pawnDoublePenalty;
-                    trace.pawn_doubled_penalty[side]--;
-                }
-                if (isIsolatedPawn) {
-                    score[side] -= pawnIsolatedPenalty;
-                    trace.pawn_isolated_penalty[side]--;
-                }
-
-                score[side] += pawnTable[posFlipped];
-                attacks = arrPawnAttacks[side][Piece::pawn];
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1;
-                if (nAtksOnOuterRing)
-                    nAttackers += 0.5;
-                totalAtkUnits += nAtksOnInnerRing * 2 + nAtksOnOuterRing;
-            }
-            break;
-            case knight:
-                score[side] += knightTable[posFlipped];
-                attacks = getKnightAttackSquares(pos) & ~myPiece;
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1;
-                if (nAtksOnOuterRing)
-                    nAttackers += 0.5;
-                totalAtkUnits += nAtksOnInnerRing * 3 + nAtksOnOuterRing * 2;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::knight];
-                trace.mobilities[Piece::knight][side] += popcount64(attacks);
-                break;
-            case bishop:
-                score[side] += bishopTable[posFlipped];
-                attacks = getBishopAttackSquares(occupied, pos) & ~myPiece;
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1;
-                if (nAtksOnOuterRing)
-                    nAttackers += 0.5;
-                totalAtkUnits += nAtksOnInnerRing * 3 + nAtksOnOuterRing * 2;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::bishop];
-                trace.mobilities[Piece::bishop][side] += popcount64(attacks);
-                break;
-            case rook:
-                score[side] += rookTable[posFlipped];
-                attacks = getRookAttackSquares(occupied, pos) & ~myPiece;
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1;
-                if (nAtksOnOuterRing)
-                    nAttackers += 0.5;
-                totalAtkUnits += nAtksOnInnerRing * 4 + nAtksOnOuterRing * 3;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::rook];
-                trace.mobilities[Piece::rook][side] += popcount64(attacks);
-                break;
-            case queen:
-                score[side] += queenTable[posFlipped];
-                attacks = (getRookAttackSquares(occupied, pos) | getBishopAttackSquares(occupied, pos)) & ~myPiece;
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 2;
-                if (nAtksOnOuterRing)
-                    nAttackers += 1;
-                totalAtkUnits += nAtksOnInnerRing * 5 + nAtksOnOuterRing * 5;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::queen];
-                trace.mobilities[Piece::queen][side] += popcount64(attacks);
-                break;
-            case king:
-                score[side] += kingTable[posFlipped];
-                attacks = getKingAttackSquares(pos) & ~myPiece;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::king];
-                trace.mobilities[Piece::king][side] += popcount64(attacks);
-                break;
-            default:
-                break;
-            }
-        }
-        if (nAttackers >= 4) {
-            score[side] += SafetyTable[totalAtkUnits];
-            trace.king_attacks[totalAtkUnits][side]++;
-        }
-    }
-
-    //king safety-related
-    uint64_t pawnsBBAll = pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn];
-    for (int side = 0; side < 2; side++) {
-        uint64_t kingAttacks = getKingAttackSquares(kingPos[side]);
-        int nPawnsSurroundKing = popcount64(kingAttacks & pieceBB[side][Piece::pawn]);
-        int nOpenFilesKing = 0;
-        int nSemiOpenFilesKing = 0;
-        if (fileKing[side] == 0) {
-            nOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[Side::White][kingPos[side]] & pawnsBBAll));
-            nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[Side::White][kingPos[side] + 1] & pieceBB[side][Piece::pawn]));
-        }
-        else if (fileKing[side] == 7) {
-            nOpenFilesKing = (!(arrAfterPawn[Side::White][kingPos[side]] & pawnsBBAll)) + (!(arrAfterPawn[Side::White][kingPos[side] - 1] & pawnsBBAll));
-            nSemiOpenFilesKing = (!(arrAfterPawn[Side::White][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[Side::White][kingPos[side] - 1] & pieceBB[side][Piece::pawn]));
-        }
-        else {
-            nOpenFilesKing = (!(arrAfterPawn[Side::White][kingPos[side]] & pawnsBBAll)) + (!(arrAfterPawn[Side::White][kingPos[side] - 1] & pawnsBBAll)) + (!(arrAfterPawn[Side::White][kingPos[side] + 1] & pawnsBBAll));
-            nSemiOpenFilesKing = (!(arrAfterPawn[Side::White][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[Side::White][kingPos[side] + 1] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[Side::White][kingPos[side] - 1] & pieceBB[side][Piece::pawn]));
-        }
-        score[side] += nPawnsSurroundKing * bonusPawnSurroundKing;
-        trace.king_shield[side] += nPawnsSurroundKing;
-        score[side] -= openFilesPenalty[nOpenFilesKing];
-        score[side] -= semiOpenFilesPenalty[nSemiOpenFilesKing];
-        trace.open_files_penalty[nOpenFilesKing][side]--;
-        trace.semi_open_files_penalty[nSemiOpenFilesKing][side]--;
-    }
-
-    phase = (phase * 256 + (TOTAL_PHASE / 2)) / TOTAL_PHASE;
-
-    //0: midgame,256:endgame
-    if (sumOfWeightDist[0] > 0) {
-        score[0] -= static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[0]) / static_cast<float>(sumOfWeightDist[0]))) * kingPawnTropismFactor;
-        trace.tropism_factor[0] = -static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[0]) / static_cast<float>(sumOfWeightDist[0])));
-    }
-    if (sumOfWeightDist[1] > 0) {
-        score[1] -= static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[1]) / static_cast<float>(sumOfWeightDist[1]))) * kingPawnTropismFactor;
-        trace.tropism_factor[1] = -static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[0]) / static_cast<float>(sumOfWeightDist[0])));
-    }
-
-    int eval = (score[0] - score[1]) * (isWhiteTurn ? 1 : -1);
-    trace.score = (((short)eval * (256 - phase) + ((eval + 0x8000) >> 16) * (phase)) / 256);
-    return trace;
-}
-
-bool BitBoard::isInsufficientMaterial() {
-    uint64_t occupied = pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any];
-    int nPieces = popcount64(occupied);
-    if (nPieces == 2) {
-        return true;
-    }
-    if (nPieces == 3) {
-        uint64_t drawPieces = pieceBB[Side::White][Piece::knight] | pieceBB[Side::White][Piece::bishop] | pieceBB[Side::Black][Piece::knight] | pieceBB[Side::Black][Piece::bishop];
-        if (drawPieces) {
-            return true;
-        }
-    }
-    if (nPieces == 4) {
-        const uint64_t lightSquare = 0x55AA55AA55AA55AAull;
-        const uint64_t darkSquare = 0xAA55AA55AA55AA55ull;
-        uint64_t drawPieces = pieceBB[Side::White][Piece::bishop] | pieceBB[Side::Black][Piece::bishop];
-        if (pieceBB[Side::White][Piece::bishop] && pieceBB[Side::Black][Piece::bishop] && (popcount64(drawPieces & lightSquare) == 2 || popcount64(drawPieces & darkSquare) == 2)) {
-            return 0;
-        }
-    }
-    return false;
-}
-
-
-
 TranspositionTable* ttable = new TranspositionTable();
 std::atomic<int> maxThreadDepth = 0;
 std::string finalBestMove;
@@ -3446,21 +2901,12 @@ public:
     Move uciToMove(std::string uci);
     void selectionSort(MoveVector& moves, int currIndex);
     void parseMoves(std::vector<std::string> moves);
-    int qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int pliesFromLeaf = 0);
+    int qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf,int pliesFromRoot);
     int search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV = false, bool canNullMove = true);
     int iterativeDeepening(int depth, int timeLeft = -1, int moveTime = -1);
     void runMultithread();
     void moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove);
     void moveOrdering(BitBoard& bb, std::vector<Move>& moves, int pliesFromRoot, Move& currBestMove);
-    bool hasWon() {
-        return currEval > 1000000000;
-    }
-    bool hasLost() {
-        return currEval < -1000000000;
-    }
-    bool hasDrawn() {
-        return bb.isInsufficientMaterial();
-    }
     std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1);
     void initTranspositionTable();
 };
@@ -3576,10 +3022,6 @@ void ChessEngine::addMove(Move move) {
     moveHistory.push_back(move);
     uint64_t lastPosHash = hashMoveHistory[hashMoveHistory.size() - 1];
     uint64_t currPosHash = bb.move(move, lastPosHash);
-    //std::cout << currPosHash << std::endl;
-    //if (currPosHash != bb.getCurrentPositionHash()) {
-    //    std::cout << "BUGG" << std::endl;
-    //}
     hashMoveHistory.push_back(currPosHash);
 }
 
@@ -3626,84 +3068,9 @@ std::string ChessEngine::findBestMove(int depth, int timeLeft, int moveTime) {
             return bestMove;
         }
     }
-    /*
-    else if (popcount64(bb.pieceBB[Side::White][Piece::any] | bb.pieceBB[Side::Black][Piece::any]) >= 3 && popcount64(bb.pieceBB[Side::White][Piece::any] | bb.pieceBB[Side::Black][Piece::any]) <= 5) {
-        if (bb.isKingInCheck() && bb.getLegalMoves().size() == 0) {
-            currEval = -2000000000;
-            return "a1a1";
-        }
-        if (bb.getLegalMoves().size() == 0) {
-            currEval = 0;
-            return "a1a1";
-        }
-        //syzygy
-        uint64_t currHash = bb.getCurrentPositionHash();
-        bool hashRepeated = false;
-        for (uint64_t pastHash : hashMoveHistory) {
-            if (currHash == pastHash)
-                hashRepeated = true;
-        }
-        TbRootMoves movesList;
-        tb_probe_root_wdl(
-            bb.pieceBB[Side::White][Piece::any],
-            bb.pieceBB[Side::Black][Piece::any],
-            bb.pieceBB[Side::White][Piece::king] | bb.pieceBB[Side::Black][Piece::king],
-            bb.pieceBB[Side::White][Piece::queen] | bb.pieceBB[Side::Black][Piece::queen],
-            bb.pieceBB[Side::White][Piece::rook] | bb.pieceBB[Side::Black][Piece::rook],
-            bb.pieceBB[Side::White][Piece::bishop] | bb.pieceBB[Side::Black][Piece::bishop],
-            bb.pieceBB[Side::White][Piece::knight] | bb.pieceBB[Side::Black][Piece::knight],
-            bb.pieceBB[Side::White][Piece::pawn] | bb.pieceBB[Side::Black][Piece::pawn],
-            30,
-            0,
-            bb.enPassantPos,
-            bb.isWhiteTurn,
-            true,
-            &movesList
-        );
-        TbRootMove highestRankMove;
-        int highestRank = -2000000000;
-        for (int i = 0; i < movesList.size; i++) {
-            int fromSq = TB_MOVE_FROM(movesList.moves[i].move);
-            int toSq = TB_MOVE_TO(movesList.moves[i].move);
-            int promote = TB_MOVE_PROMOTES(movesList.moves[i].move);
-
-            std::cout << indexToSquare[fromSq] + indexToSquare[toSq] << " " << movesList.moves[i].tbRank << std::endl;
-            if (movesList.moves[i].tbRank > highestRank) {
-                highestRankMove = movesList.moves[i];
-                highestRank = movesList.moves[i].tbRank;
-            }
-        }
-        int fromSq = TB_MOVE_FROM(highestRankMove.move);
-        int toSq = TB_MOVE_TO(highestRankMove.move);
-        int promote = TB_MOVE_PROMOTES(highestRankMove.move);
-        switch (promote) {
-        case 0:
-            bestMove = indexToSquare[fromSq] + indexToSquare[toSq];
-            break;
-        case 1:
-            bestMove = indexToSquare[fromSq] + indexToSquare[toSq] + 'q';
-            break;
-        case 2:
-            bestMove = indexToSquare[fromSq] + indexToSquare[toSq] + 'r';
-            break;
-        case 3:
-            bestMove = indexToSquare[fromSq] + indexToSquare[toSq] + 'b';
-            break;
-        case 4:
-            bestMove = indexToSquare[fromSq] + indexToSquare[toSq] + 'n';
-            break;
-        default:
-            break;
-        }
-        return bestMove;
-    }
-    */
+    
     else {
-        //TODO
-
         int evaluation = iterativeDeepening(depth, timeLeft, moveTime);
-        //runMultithread();
-        //std::cout << "EVALUATION: " << evaluation << std::endl;
         return bestMove;
     }
 }
@@ -4024,7 +3391,7 @@ void ChessEngine::moveOrdering(BitBoard& bb, std::vector<Move>& moves, int plies
         }
     }
 }
-int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int pliesFromLeaf) {
+int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf,int pliesFromRoot) {
     //qNodeCnt++;
     int bestScore = -2000000000;
     bool isKingInCheck = bb.isKingInCheck();
@@ -4036,9 +3403,6 @@ int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int 
         alpha = score;
     }
     bestScore = score;
-    /*
-
-    */
     int futilityBase = score + futilityMarginQSearch;
     if (pliesFromLeaf > maxPlyQSearch) {
         if (isKingInCheck && bb.getLegalMoves().size() == 0) {
@@ -4046,7 +3410,13 @@ int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int 
         }
         return bestScore;
     }
-    std::vector<Move> moves = !isKingInCheck ? bb.getLegalCaptures() : bb.getLegalMoves();
+    auto& moves = ss[pliesFromRoot].moves;
+    if (isKingInCheck) {
+        bb.getLegalMovesAlt(moves);
+    }
+    else {
+        bb.getLegalCapturesAlt(moves);
+    }
     if (moves.size() == 0) {
         if (isKingInCheck) {
             return -2000000000;
@@ -4056,13 +3426,9 @@ int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int 
     }
     Move nullMove = Move();
     moveOrdering(bb, moves, 63, nullMove);
-
-    std::sort(moves.begin(), moves.end(), [](const Move& a, const Move& b) {
-        return a.getMovePriority() > b.getMovePriority();
-        });
-
     bool isEndgame = bb.isEndgame();
     for (int i = 0; i < moves.size(); i++) {
+        selectionSort(moves, i);
         MoveType type = moves[i].getMoveType();
         int endPos = moves[i].getEndPos();
         Side sideToMove = moves[i].getSideToMove();
@@ -4093,12 +3459,11 @@ int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int 
         }
 
         bb.move(moves[i]);
-        score = -qSearch(bb, -beta, -alpha, endPos, pliesFromLeaf + 1);
+        score = -qSearch(bb,ss, -beta, -alpha, endPos, pliesFromLeaf + 1,pliesFromRoot+1);
         bb.undoMove(moves[i]);
         if (score > bestScore)
             bestScore = score;
         if (score >= beta) {
-            //std::cout << score << std::endl;
             return score;
         }
         alpha = std::max(alpha, score);
@@ -4107,7 +3472,6 @@ int ChessEngine::qSearch(BitBoard& bb, int alpha, int beta, int prevEndPos, int 
 }
 
 int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, bool canNullMove) {
-    //assert(depth >= 0);
     mainNodeCnt++;
     if ((mainNodeCnt & 1023) == 1023) {
         auto endTime = std::chrono::steady_clock::now();
@@ -4120,8 +3484,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     if (isKingInCheck && pliesFromRoot < maxDepth * 2) {
         depth++;
     }
-    if (depth == 0) {
-        return qSearch(bb, alpha, beta, -1);
+    if (depth <= 0) {
+        return qSearch(bb,ss, alpha, beta, -1,0,pliesFromRoot);
     }
     Move potentialBestMove = Move();
     TableEntry* entry = ttable->find(zHash);
@@ -4171,45 +3535,31 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     bool improving = pliesFromRoot >= 2 && evalDepthZero > ss[pliesFromRoot - 2].eval;
     int staticEval = isFoundInTable ? entryScore : evalDepthZero;
     bool isRepeated = false;
+    //reverse futility pruning
+    if (!isPVNode && !isKingInCheck && staticEval >= beta && depth <= rfpDepthLimit && canNullMove && pliesFromRoot > 0 && staticEval < 1000000000) {
+        int rfpScore = staticEval - rfpMargin * (depth);
+        if (rfpScore >= beta) {
+            return beta > -1000000000 ? (staticEval + beta) / 2 : staticEval;
+        }
+    }
     if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && !bb.isKingAndPawnEndgame()) {
         Move nullMove = Move();
         ss[pliesFromRoot].move = nullMove;
         uint64_t newHash = bb.move(nullMove, zHash);
-        //int R = 2+(depth/8);
-        //std::cout << std::max((depth * 100 + (beta - staticEval) / 100) / 186 - 1, 0) << std::endl;
-        //std::cout << beta << " "<<staticEval<<std::endl;
-        //std::cout << (beta - staticEval) / 100 << std::endl;
-        //cnt[std::clamp(((depth * 100 + (beta - staticEval) / 100) / 186 )- 1, 1, depth - 1)]++;
         int evalNullMove = 0;
         if (!bb.isRepeatedPosition()) {
             evalNullMove = -search(bb, ss, std::clamp(((depth * 100 + (beta - staticEval) / 100) / nullMoveDivision) - 1, 1, depth) - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, false, false);
         }
-        //std::cout << std::max((depth * 100 + (beta - staticEval) / 100) / 186 - 1, 0);
 
         bb.undoMove(nullMove);
         if (evalNullMove >= beta) {
-            //transpositionTable[zHash] = TableEntry(Move(), NodeFlag::CUTNODE, depth, evalNullMove);
-
             return beta;
         }
-        //cnt[depth]++;
         bestScore = std::max(bestScore, evalNullMove);
     }
-    /*
-    //probcut
-    if (depth > 4 && abs(beta) < 1000000000 && !isKingInCheck && !isPVNode && canNullMove && pliesFromRoot != 0 && !bb.isKingAndPawnEndgame()) {
-        int probCutBeta = beta + 5000 * depth;
-        int probCutScore = 0;
-        probCutScore = search(bb, ss,depth - 3, maxDepth, probCutBeta - 1, (probCutBeta), zHash, pliesFromRoot, isPV, canNullMove);
-        if (probCutScore >= probCutBeta) {
-            return probCutScore;
-        }
-
-    }
-    */
     NodeFlag flag = NodeFlag::ALLNODE;
     Move currBestMove = potentialBestMove;
-    bool delayedMoveGen = pliesFromRoot>0;
+    bool delayedMoveGen = pliesFromRoot > 0;
     //Delay move generation: test the best move from previous iteration first
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
     if (!potentialBestMove.isNullMove() && delayedMoveGen && bb.isValidMove(potentialBestMove)) {
@@ -4218,7 +3568,6 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         int endPos = potentialBestMove.getEndPos();
         ss[pliesFromRoot].move = potentialBestMove;
         uint64_t newHash = bb.move(potentialBestMove, zHash);
-        //prefetch(&ttable->arrEntry[zHash & MASK_HASH][0]);
         int score = 0;
 
 
@@ -4228,7 +3577,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         else
             isRepeated = true;
         bb.undoMove(potentialBestMove);
-        if (pliesFromRoot == 0&&score>bestScore)
+        if (pliesFromRoot == 0 && score > bestScore)
             bestMove = potentialBestMove.toUci();
         if (score >= beta) {
             if (!isRepeated)
@@ -4251,7 +3600,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         }
         if (score > bestScore) {
             bestScore = score;
-            
+
         }
         if (score > alpha) {
             alpha = score;
@@ -4264,7 +3613,6 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
     //generate legal moves
     auto& moves = ss[pliesFromRoot].moves;
-    //std::vector<Move> moves = bb.getLegalMoves();
     bb.getLegalMovesAlt(moves);
     if (moves.size() == 0) {
         if (isKingInCheck)
@@ -4272,36 +3620,19 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         return 0;
     }
 
-    //reverse futility pruning
-    if (!isPVNode && !isKingInCheck && staticEval >= beta && depth <= rfpDepthLimit && canNullMove && pliesFromRoot > 0 && staticEval < 1000000000) {
-        int rfpScore = staticEval - rfpMargin * depth;
-        if (rfpScore >= beta) {
-            //cnt[depth]++;
-            //transpositionTable[zHash] = TableEntry(Move(), NodeFlag::CUTNODE, depth, rfpScore);
-            return beta > -1000000000 ? (staticEval + beta) / 2 : staticEval;
-        }
-    }
+    
     /*
+    Razoring
     if (!isPVNode && !isKingInCheck && staticEval <=alpha-25000 &&alpha==beta-1 && depth < rfpDepthLimit && pliesFromRoot > 0 && staticEval < 1000000000) {
         cnt[depth]++;
         return qSearch(bb, alpha, beta, -1, 0);
     }
     */
     moveOrdering(bb, moves, pliesFromRoot, currBestMove);
-
-    //Sort move priority
-    /*
-    std::sort(moves.begin(), moves.end(), [](const Move& a, const Move& b) {
-        return a.getMovePriority() > b.getMovePriority();
-        });
-    */
-    //moves.sortByPriority();
-    //main loop
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
     bool lmr = !isPVNode && depth >= 3;
     int futilityVal = 0;
     int i;
-    //cnt[0]++;
     int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 4 : quietsToCheckTable[depth]) : 999;
     for (i = 0; i < moves.size(); i++) {
         selectionSort(moves, i);
@@ -4313,29 +3644,23 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         int endPos = moves[i].getEndPos();
         ss[pliesFromRoot].move = moves[i];
         uint64_t newHash = bb.move(moves[i], zHash);
-        //prefetch(&ttable->arrEntry[zHash&MASK_HASH][0]);
         int score = 0;
-
-        //Pawn near promotion extension (the move is pawn push to 6th or 7th rank and the pawn is passed)
         if (!bb.isRepeatedPosition()) {
-            //Pawn near promotion extension (the move is pawn push to 6th or 7th rank and the pawn is passed)
             bool canLMR = (lmr && i > 0 && moves[i].getMovePriority() < 15001 && moveType != MoveType::CAPTURE);
-            //bool givesCheck = bb.giveCheck(moves[i]);
 
             int lmrDepth = depth;
             if (canLMR) {
-                int reducedDepth = (log2(i)*log2(depth)/lmrDiv+lmrBase) + (historyTable[sideToMove][movePiece][endPos] / historyReductionFactor) + (!improving && pliesFromRoot >= 2) - isKingInCheck;
+                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + (historyTable[sideToMove][movePiece][endPos] / historyReductionFactor) + (!improving && pliesFromRoot >= 2) - isKingInCheck;
                 lmrDepth = depth - std::clamp(reducedDepth, 1, depth);
             }
 
-            //pruning
+            //pruning at low depth
             if (!isKingInCheck && !isPVNode && pliesFromRoot > 0 && bestScore > -1000000000) {
                 futilityVal = staticEval + (bestScore < staticEval - 5900 ? 14100 : 7800) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
                 if (lmrDepth <= futilityDepthLimit && futilityVal <= alpha && moveType == MoveType::NORMAL) {
                     if (bestScore <= futilityVal && abs(bestScore) < 1000000000) {
                         bestScore = (bestScore + futilityVal) / 2;
                     }
-                    //cnt[depth - 1]++;
                     bb.undoMove(moves[i]);
                     break;
                 }
@@ -4343,33 +3668,19 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     bb.undoMove(moves[i]);
                     break;
                 }
-                if (!isPVNode && !isKingInCheck && moveType == MoveType::NORMAL) {
+                if (!isPVNode && !isKingInCheck && moveType == MoveType::NORMAL && lmrDepth<8) {
                     bb.undoMove(moves[i]);
-                    if ( !bb.SEE_GE(moves[i], -17 * lmrDepth * lmrDepth)) {
+                    if (!bb.SEE_GE(moves[i], SEENormalMargin * lmrDepth * lmrDepth)) {
                         continue;
                     }
                     bb.move(moves[i], zHash);
                 }
-                /*
-                if (moveType == MoveType::CAPTURE) {
-                    if (!bb.SEE_GE(moves[i], SEEMargin * depth)) {
-                        cnt[depth]++;
-                        bb.undoMove(moves[i]);
-                        continue;
-                    }
-                }
-                */
 
 
             }
             //Late move reduction, reduce move not high in priority
 
             if (canLMR) {
-
-                //int reducedDepth = depth>=4?2:1;
-
-                //cnt[reducedDepth]++;
-                //int reducedDepth = (depth >= 4 ? 2 : 1)+1;
                 int reducedScore = -search(bb, ss, lmrDepth, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1);
 
                 if (reducedScore > alpha) {
@@ -4397,7 +3708,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             isRepeated = true;
         }
         bb.undoMove(moves[i]);
-        if (pliesFromRoot == 0 && score >bestScore) {
+        if (pliesFromRoot == 0 && score > bestScore) {
             bestMove = moves[i].toUci();
         }
         if (score >= beta) {
@@ -4418,11 +3729,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                 }
             }
 
-
-            //cnt[1] += i;
             if (!isRepeated)
                 ttable->set(zHash, TableEntry(zHash, moves[i], NodeFlag::CUTNODE, depth, score, evalDepthZero));
-            /**/
             //If the move is not high in priority and it is not in the killer move yet,save it to the killer move array 
 
             if (moves[i].getMovePriority() < 15001 && !(moves[i] == killerMoves[pliesFromRoot][0])) {
@@ -4434,7 +3742,6 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     killerMoves[pliesFromRoot][0] = moves[i];
                 }
             }
-            //std::cout << score << std::endl;
             return score;
         }
         if (score > bestScore) {
@@ -4448,14 +3755,13 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         }
 
     }
-    //cnt[1] += i;
     //save to TTable
     if ((!isFoundInTable || entryDepth <= depth)) {
         if (flag == NodeFlag::ALLNODE) {
             ttable->set(zHash, TableEntry(zHash, potentialBestMove, flag, depth, bestScore, evalDepthZero));
         }
         else if (flag == NodeFlag::EXACT) {
-            ttable->set(zHash, TableEntry(zHash, currBestMove, flag, depth, bestScore,  evalDepthZero));
+            ttable->set(zHash, TableEntry(zHash, currBestMove, flag, depth, bestScore, evalDepthZero));
         }
     }
     return bestScore;
@@ -4480,14 +3786,11 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
 
     }
     timeLimitInMs = time;
-    //std::cout << "Time allocated: " << time << std::endl;
-    //init variable
     int currEval = 0;
     int prevEval = 1000000000;
 
     uint64_t zHash = bb.getCurrentPositionHash();
     ttable->currRootAge = bb.moveNum;
-    //std::cout << zHash << std::endl;
     std::string lastBestMove;
     searchStartTime = std::chrono::steady_clock::now();
     SearchStack ss[128];
@@ -4530,8 +3833,6 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
                     break;
                 }
                 power++;
-
-                //if the windows fail the 4th time,cancel it and do a full window search
                 if (power >= 1) {
                     upperBound = 2000000001;
                     lowerBound = -2000000001;
@@ -4621,19 +3922,14 @@ public:
         isWhiteTurn = engines[0].bb.isWhiteTurn;
     }
 
-    void runMultithread() {
-
-    }
-
     std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1) {
         for (int i = 0; i < nThreads; i++) {
-            threads[i] = std::thread(&ChessEngine::iterativeDeepening, engines[i], i < 2 ? 1 : 2, timeLeft, moveTime);
+            threads[i] = std::thread(&ChessEngine::iterativeDeepening, engines[i], i < nThreads/2 ? 1 : 2, timeLeft, moveTime);
         }
         for (int i = 0; i < nThreads; i++) {
             threads[i].join();
         }
         int currEval = -2e9;
-        //std::cout<<"Final best: "<<bestMove<<std::endl;
         maxThreadDepth = 0;
         bestMove = finalBestMove;
         return bestMove;
@@ -4739,12 +4035,8 @@ void uciCommunication()
     const std::string start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     std::string line;
     auto   running = true;
-    //engine.parseFEN("r1bq1rk1/p4p2/1pn1p1p1/3pP1N1/3P3Q/2PB4/P4PKP/4RR2 b - - 1 18");
-    //std::cout << engine.findBestMove(6) << std::endl;
-    //std::ofstream out("log_engine.txt");
     while (running && getline(std::cin, line))
     {
-        //out << line << std::endl;
         line += " ";
         std::istringstream iss(line);
         std::string        token;
@@ -4757,12 +4049,13 @@ void uciCommunication()
             std::cout << "option name maxPlyQSearch type spin default 6 min 1 max 12" << std::endl;
             std::cout << "option name futilityMarginQSearch type spin default 22000 min 5000 max 50000" << std::endl;
             std::cout << "option name SEEMarginQSearch type spin default -34 min -400 max 400" << std::endl;
+            std::cout << "option name SEENormalMargin type spin default -17 min -25 max -10" << std::endl;
             std::cout << "option name IIDReductionDepth type spin default 2 min 0 max 4" << std::endl;
             std::cout << "option name nullMoveDivision type spin default 186 min 120 max 320" << std::endl;
             std::cout << "option name rfpDepthLimit type spin default 4 min 1 max 10" << std::endl;
             std::cout << "option name rfpMargin type spin default 6000 min 0 max 40000" << std::endl;
-            std::cout << "option name lmrMoveCntFactor type spin default 93 min 1 max 400" << std::endl;
-            std::cout << "option name lmrDepthFactor type spin default 144 min 1 max 500" << std::endl;
+            std::cout << "option name lmrDiv type spin default 367 min 343 max 555" << std::endl;
+            std::cout << "option name lmrBase type spin default 43 min 1 max 100" << std::endl;
             std::cout << "option name historyReductionFactor type spin default -3500 min -8250 max 8250" << std::endl;
             std::cout << "option name futilityMargin type spin default 12500 min 1 max 90000" << std::endl;
             std::cout << "option name futilityDepthLimit type spin default 6 min 0 max 12" << std::endl;
@@ -4860,7 +4153,7 @@ void uciCommunication()
             running = false;
         }
         else if (token == "setoption") {
-            /*
+            
             std::string tmp;
             std::string optionName;
             std::string value;
@@ -4886,17 +4179,22 @@ void uciCommunication()
             else if (optionName == "rfpDepthLimit") {
                 rfpDepthLimit = std::stoi(value);
             }
+            else if (optionName == "lmrDiv") {
+                lmrDiv = std::stoi(value);
+                lmrDiv /= 100.f;
+            }
+            else if (optionName == "lmrBase") {
+                lmrBase = std::stoi(value);
+                lmrBase /= 100.f;
+            }
+            else if (optionName == "SEENormalMargin") {
+                SEENormalMargin = std::stoi(value);
+            }
             else if (optionName == "rfpMargin") {
                 rfpMargin = std::stoi(value);
             }
             else if (optionName == "historyReductionFactor") {
                 historyReductionFactor = std::stoi(value);
-            }
-            else if (optionName == "lmrMoveCntFactor") {
-                lmrMoveCntFactor = std::stoi(value);
-            }
-            else if (optionName == "lmrDepthFactor") {
-                lmrDepthFactor = std::stoi(value);
             }
             else if (optionName == "futilityMargin") {
                 futilityMargin = std::stoi(value);
@@ -4907,7 +4205,7 @@ void uciCommunication()
             else if (optionName == "SEEMargin") {
                 SEEMargin = std::stoi(value);
             }
-        */
+       
         }
         else
         {
@@ -4919,72 +4217,11 @@ void uciCommunication()
 
 }
 
-void testEPD() {
-
-    std::string line;
-    std::string ans;
-    std::string fen;
-    std::ifstream epd("test.epd");
-    std::ofstream err("fail.txt");
-    int success = 0;
-    int fail = 0;
-    int progress = 0;
-    ChessEngine engine = ChessEngine();
-
-    while (std::getline(epd, line)) {
-        std::cout << progress << '\r';
-        std::istringstream ss(line);
-        std::getline(ss, fen, ';');
-        std::getline(ss, ans, ';');
-        engine.parseFEN(fen);
-        std::string engineBestMove = engine.findBestMove(1);
-        if (ans == engineBestMove) {
-            success++;
-        }
-        else {
-            fail++;
-            err << fen << ";" << ans << ";" << engineBestMove << std::endl;
-        }
-        progress++;
-    }
-    std::cout << "Success: " << success << "/" << success + fail << std::endl;
-    std::cout << "Failed: " << fail << "/" << success + fail << std::endl;
-
-}
-
-void testSEE() {
-    std::string fen;
-    std::getline(std::cin, fen);
-    BitBoard bb = BitBoard(fen);
-    auto v = bb.getLegalCaptures();
-    for (Move m : v) {
-        if (m.getMoveType() == MoveType::CAPTURE) {
-            bool evalSEE = bb.SEE_GE(m, 2);
-            if (evalSEE) {
-                std::cout << m.toUci() << std::endl;
-            }
-        }
-    }
-}
-
 
 int main(int argn, char** argv) {
     //tb_init((PATH + "syzygy").c_str());
-    //BoardUI boardUI = BoardUI("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-    //boardUI.run();
-    //boardUI.matchMaking(5);
-    //testEvaluation();
-    //testSearch();
-    //testSEE();
-    //testEPD();
-    //std::cout << popcount64(0);
     //testMoveGen();
     //testMoveSorting();
-    //std::cout << BitScanForward64(0b11010000) << std::endl;
     uciCommunication();
-    //MultithreadChessEngine engine=MultithreadChessEngine(4);
-    //engine.parseFEN("r1b1k2r/pp1nbp1p/1q3p2/4p3/3p1B2/2PB1N2/PP2QPPP/R4RK1 w kq - 2 12");
-    //engine.findBestMove(64);
-    //getchar();
     return 0;
 }

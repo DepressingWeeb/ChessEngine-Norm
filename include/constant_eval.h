@@ -27,9 +27,9 @@ const int bonusPassedPawnByRank[8] = { 0, S(8, -2), S(7, -7), S(-3, 21), S(15, 5
 const int penaltyBlockedPasserByRank[8] = { 0, S(14, 5), S(2, 2), S(-1, 9), S(3, 17), S(-4, 64), S(-12, 109), 0 };
 const int bonusConnectedPassedPawn = S(21, 30);
 const int penaltyOpKingCanBlockPasser = S(0, 0);
-const int penaltyAttackedByPawn[2] = {S(40,16),S(110,68)};
+const int bonusThreatOnHigherValuePiece[2] = {S(40,16),S(140,80)};
 const int penaltyOpenKing = S(5, -2);
-
+const int bonusPawnPhalanx = S(11, 14);
 const int materialValue[7] = { 0, S(100, 137), S(381, 328), S(385, 381), S(527, 690), S(1142, 1213), 0 };
 const int mobilityValue[7] = { 0, 0, S(8, 13), S(7, 8), S(4, 5), S(1, 9), S(-7, 13) };
 

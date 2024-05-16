@@ -30,9 +30,6 @@
     <ClInclude Include="include\constant_search.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="include\fancy_movegen.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="include\ttable.h">
       <Filter>Header Files</Filter>
     </ClInclude>
