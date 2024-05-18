@@ -2,10 +2,11 @@
 #include "types.h"
 #include <stdlib.h>
 #include <iostream>
+#include <nmmintrin.h>
 const uint64_t TABLE_SIZE = 0x100000;
 const uint64_t MASK_HASH = TABLE_SIZE-1;
 const int MATE_VALUE = 2e9;
-const int BUCKET_SIZE = 3;
+const int BUCKET_SIZE = 4;
 class TableEntry {
 public:
     uint64_t data1;
@@ -129,22 +130,29 @@ public:
     }
     TableEntry* find(uint64_t zHash) {
         uint64_t key = zHash & MASK_HASH;
-        if (arrEntry[key][0].getHash() == static_cast<uint32_t>(zHash>>32) ) {
-            return &arrEntry[key][0];
-        }
-        else if (arrEntry[key][1].getHash() == static_cast<uint32_t>(zHash >> 32)) {
-            return &arrEntry[key][1];
-        }
-        else if (arrEntry[key][2].getHash() == static_cast<uint32_t>(zHash >> 32)) {
-            return &arrEntry[key][2];
+        for (int i = 0; i < BUCKET_SIZE; i++) {
+            if (arrEntry[key][i].getHash() == static_cast<uint32_t>(zHash >> 32)) {
+                return &arrEntry[key][i];
+            }
         }
         return nullptr;
     }
     void set(uint64_t zHash, TableEntry t) {
         uint64_t key = zHash & MASK_HASH;
-        arrEntry[key][2] = arrEntry[key][1];
-        arrEntry[key][1] = arrEntry[key][0];
+        for (int i = 0; i < BUCKET_SIZE; i++) {
+            if (arrEntry[key][i].getHash() == (zHash >> 32)) {
+                arrEntry[key][i] = t;
+                return;
+            }
+        }
+        for (int i = BUCKET_SIZE - 1; i > 0; i--) {
+            arrEntry[key][i] = arrEntry[key][i - 1];
+        }
         arrEntry[key][0] = t;
+    }
+
+    void prefetch(uint64_t zHash) {
+        _mm_prefetch((const char*)&arrEntry[zHash&MASK_HASH][0], _MM_HINT_T0);
     }
 };
 

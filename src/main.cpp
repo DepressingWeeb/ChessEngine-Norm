@@ -79,6 +79,7 @@ private:
     Magic mBishopTbl[64];
     Magic mRookTbl[64];
     Direction precalcDir[64][64];
+    uint64_t flipped[2][64];
     uint64_t dirMask[64][64];
     struct RandomHash {
         uint64_t pieceRand[2][7][64];
@@ -241,10 +242,10 @@ public:
     bool SEE_GE(Move m, int threashold);
     int evaluate(int alpha, int beta);
     int posToRank(int pos) {
-        return pos / 8;
+        return pos >> 3;
     }
     int posToFile(int pos) {
-        return pos % 8;
+        return pos & 0b111;
     }
     std::pair<int, int> posToRowCol(int pos);
     int rowColToPos(int row, int col);
@@ -508,6 +509,7 @@ void BitBoard::initConstant() {
             arrPawnAttacks[Side::White][i] = (1ull << (i + 7)) | (1ull << (i + 9));
             arrPawnAttacks[Side::Black][i] = (1ull << (i - 7)) | (1ull << (i - 9));
         }
+
     }
 
     for (int i = 0; i < 64; i++) {
@@ -647,13 +649,15 @@ void BitBoard::initConstant() {
         uint64_t maskNeighbor = 0;
         if (pawnFile == 0) {
             mask = getMaskOfFile(pawnFile) | getMaskOfFile(pawnFile + 1);
+            maskNeighbor = getMaskOfFile(pawnFile + 1);
         }
         else if (pawnFile == 7) {
             mask = getMaskOfFile(pawnFile) | getMaskOfFile(pawnFile - 1);
+            maskNeighbor =getMaskOfFile(pawnFile - 1);
         }
         else {
             mask = getMaskOfFile(pawnFile) | getMaskOfFile(pawnFile + 1) | getMaskOfFile(pawnFile - 1);
-            maskNeighbor = getMaskOfFile(pawnFile + 1) | getMaskOfFile(pawnFile - 1);;
+            maskNeighbor = getMaskOfFile(pawnFile + 1) | getMaskOfFile(pawnFile - 1);
         }
         int pawnRank = posToRank(i);
         uint64_t n = ~0;
@@ -665,8 +669,8 @@ void BitBoard::initConstant() {
         n2 >>= ((8 - pawnRank) * 8);
         arrFrontPawn[Side::Black][i] = n2 & mask;
         arrAfterPawn[Side::Black][i] = n2 & getMaskOfFile(pawnFile);
-    }
 
+    }
     for (int i = 0; i < 64; i++) {
         int x1 = i / 8;
         int y1 = i % 8;
@@ -2652,13 +2656,21 @@ int BitBoard::evaluate(int alpha, int beta) {
     int fileKing[2] = { posToFile(kingPos[0]) , posToFile(kingPos[1]) };
     int totalWeightedKingDistToOwnPawn[2]{ 0 };
     int sumOfWeightDist[2]{ 0 };
-    int posFlipped = 0;
+    
     uint64_t attacks = 0;
     uint64_t isDoublePawn = false;
     bool isIsolatedPawn = false;
     Side stm = isWhiteTurn ? Side::White : Side::Black;
     uint64_t pawnSet = pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn];
-
+    uint64_t allPieces[2] = {
+        pieceBB[0][Piece::any] & ~pieceBB[0][Piece::pawn],
+        pieceBB[1][Piece::any] & ~pieceBB[1][Piece::pawn]
+    };
+    uint64_t allHeavyPieces[2] = {
+        allPieces[0] & ~(pieceBB[0][Piece::bishop] | pieceBB[0][Piece::knight]),
+        allPieces[1] & ~(pieceBB[1][Piece::bishop] | pieceBB[1][Piece::knight])
+    };
+    int nMobility;
     for (int side = 0; side < 2; side++) {
 
         uint64_t occupied2 = pieceBB[side][Piece::any];
@@ -2686,6 +2698,7 @@ int BitBoard::evaluate(int alpha, int beta) {
         uint64_t opPawnSetAtkSq = side == Side::Black ?
             (((pieceBB[!side][Piece::pawn] << 7ull) & ~0x8080808080808080ull) | ((pieceBB[!side][Piece::pawn] << 9ull) & ~0x0101010101010101ull)) :
             (((pieceBB[!side][Piece::pawn] >> 7ull) & ~0x0101010101010101ull) | ((pieceBB[!side][Piece::pawn] >> 9ull) & ~0x8080808080808080ull));
+        opPawnSetAtkSq = opPawnSetAtkSq & ~allPieces[opSide];
         if (popcount64(pieceBB[side][Piece::bishop]) == 2) {
             score[side] += bishopPairBonus;
         }
@@ -2697,17 +2710,12 @@ int BitBoard::evaluate(int alpha, int beta) {
             //Material
             score[side] += materialValue[piece];
 
-            posFlipped = pos ^ flip;
-            switch (piece)
-            {
-            case any:
-                break;
-            case pawn:
-            {
+            int posFlipped = pos^flip;
+            if(piece==Piece::pawn){
                 int rankPawn = posToRank(pos);
                 int filePawn = posToFile(pos);
                 int weight = 3;
-                int manhattanDist = abs(rankKing[side] - rankPawn) + abs(fileKing[side] - filePawn);
+                int manhattanDist = std::abs(rankKing[side] - rankPawn) + std::abs(fileKing[side] - filePawn);
                 if (isPassedPawn(static_cast<Side>(side), static_cast<Side>(!side), pos)) {
                     //flip to white perspective
                     if (side == Side::Black)
@@ -2746,12 +2754,20 @@ int BitBoard::evaluate(int alpha, int beta) {
                 else if (nAtksOnOuterRing)
                     nAttackers += 0.25f;
                 totalAtkUnits += nAtksOnInnerRing * 2 + nAtksOnOuterRing;
+                if (sideIsSTM && (attacks & allPieces[opSide])) {
+                    score[side] += bonusThreatOnHigherValuePiece[1];
+                }
+                if (popcount64(attacks) == 0) {
+                    score[side] -= penaltyNoMobility[Piece::pawn];
+                }
             }
-            break;
-            case knight:
+            else if (piece == Piece::knight) {
                 phase--;
                 score[side] += knightTable[posFlipped];
                 attacks = getKnightAttackSquares(pos) & ~(myPiece | opPawnSetAtkSq);
+                if (sideIsSTM && (attacks & allHeavyPieces[opSide])) {
+                    score[side] += bonusThreatOnHigherValuePiece[1];
+                }
                 nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
                 nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
                 if (nAtksOnInnerRing)
@@ -2759,12 +2775,19 @@ int BitBoard::evaluate(int alpha, int beta) {
                 else if (nAtksOnOuterRing)
                     nAttackers += 0.5f;
                 totalAtkUnits += nAtksOnInnerRing * 3 + nAtksOnOuterRing * 2;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::knight];
-                break;
-            case bishop:
+                nMobility = popcount64(attacks);
+                score[side] += nMobility * mobilityValue[Piece::knight];
+                if (nMobility == 0) {
+                    score[side] -= penaltyNoMobility[Piece::knight];
+                }
+            }
+            else if (piece == Piece::bishop) {
                 phase--;
                 score[side] += bishopTable[posFlipped];
                 attacks = getBishopAttackSquares(occupied, pos) & ~(myPiece | opPawnSetAtkSq);
+                if (sideIsSTM && (attacks & allHeavyPieces[opSide])) {
+                    score[side] += bonusThreatOnHigherValuePiece[1];
+                }
                 nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
                 nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
                 if (nAtksOnInnerRing)
@@ -2773,8 +2796,8 @@ int BitBoard::evaluate(int alpha, int beta) {
                     nAttackers += 0.5f;
                 totalAtkUnits += nAtksOnInnerRing * 3 + nAtksOnOuterRing * 2;
                 score[side] += popcount64(attacks) * mobilityValue[Piece::bishop];
-                break;
-            case rook:
+            }
+            else if (piece == Piece::rook) {
                 phase -= 2;
                 score[side] += rookTable[posFlipped];
                 if (!(arrAfterPawn[side][pos] & pawnSet))
@@ -2782,6 +2805,9 @@ int BitBoard::evaluate(int alpha, int beta) {
                 else if (!(arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn]))
                     score[side] += bonusRookOnSemiOpenFile;
                 attacks = getRookAttackSquares(occupied, pos) & ~(myPiece | opPawnSetAtkSq);
+                if (sideIsSTM && (attacks & pieceBB[opSide][Piece::queen])) {
+                    score[side] += bonusThreatOnHigherValuePiece[1];
+                }
                 nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
                 nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
                 if (nAtksOnInnerRing)
@@ -2790,8 +2816,8 @@ int BitBoard::evaluate(int alpha, int beta) {
                     nAttackers += 0.5f;
                 totalAtkUnits += nAtksOnInnerRing * 4 + nAtksOnOuterRing * 3;
                 score[side] += popcount64(attacks) * mobilityValue[Piece::rook];
-                break;
-            case queen:
+            }
+            else if (piece == Piece::queen) {
                 phase -= 4;
                 score[side] += queenTable[posFlipped];
                 attacks = (getRookAttackSquares(occupied, pos) | getBishopAttackSquares(occupied, pos)) & ~(myPiece | opPawnSetAtkSq);
@@ -2803,15 +2829,17 @@ int BitBoard::evaluate(int alpha, int beta) {
                     nAttackers += 1.0f;
                 totalAtkUnits += nAtksOnInnerRing * 5 + nAtksOnOuterRing * 4;
                 score[side] += popcount64(attacks) * mobilityValue[Piece::queen];
-                break;
-            case king:
+            }
+            else if (piece == Piece::king) {
                 score[side] += kingTable[posFlipped];
                 attacks = getKingAttackSquares(pos) & ~(myPiece | opPawnSetAtkSq);
-                score[side] += popcount64(attacks) * mobilityValue[Piece::king];
-                break;
-            default:
-                break;
+                nMobility = popcount64(attacks);
+                score[side] += nMobility * mobilityValue[Piece::king];
+                if (nMobility == 0) {
+                    score[side] -= penaltyNoMobility[Piece::king];
+                }
             }
+            
         }
 
         if (nAttackers >= 3) {
@@ -3395,15 +3423,15 @@ int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta
     //qNodeCnt++;
     int bestScore = -2000000000;
     bool isKingInCheck = bb.isKingInCheck();
-    int score = !isKingInCheck ? bb.evaluate(alpha, beta) : bestScore;
+    int standPat = !isKingInCheck ? bb.evaluate(alpha, beta) : bestScore;
 
-    if (score > alpha) {
-        if (score >= beta)
-            return score;
-        alpha = score;
+    if (standPat > alpha) {
+        if (standPat >= beta)
+            return standPat;
+        alpha = standPat;
     }
-    bestScore = score;
-    int futilityBase = score + futilityMarginQSearch;
+    bestScore = standPat;
+    int futilityBase = standPat + futilityMarginQSearch;
     if (pliesFromLeaf > maxPlyQSearch) {
         if (isKingInCheck && bb.getLegalMoves().size() == 0) {
             return -2000000000;
@@ -3459,7 +3487,7 @@ int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta
         }
 
         bb.move(moves[i]);
-        score = -qSearch(bb,ss, -beta, -alpha, endPos, pliesFromLeaf + 1,pliesFromRoot+1);
+        int score = -qSearch(bb,ss, -beta, -alpha, endPos, pliesFromLeaf + 1,pliesFromRoot+1);
         bb.undoMove(moves[i]);
         if (score > bestScore)
             bestScore = score;
@@ -3487,6 +3515,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     if (depth <= 0) {
         return qSearch(bb,ss, alpha, beta, -1,0,pliesFromRoot);
     }
+    
     Move potentialBestMove = Move();
     TableEntry* entry = ttable->find(zHash);
     bool isPVNode = false;
@@ -3521,12 +3550,14 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             isFoundInTable = false;
         }
     }
+
     if (depth >= 4 && !isFoundInTable) {
         depth -= IIDReductionDepth;
     }
     if (isPVNode && (pliesFromRoot & 0b111) == 7 && pliesFromRoot < maxDepth * 2) {
         depth++;
     }
+    
     int bestScore = -2000000000;
     int beginAlpha = alpha;
     bool isEndgame = bb.isEndgame();
@@ -3536,13 +3567,13 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     int staticEval = isFoundInTable ? entryScore : evalDepthZero;
     bool isRepeated = false;
     //reverse futility pruning
-    if (!isPVNode && !isKingInCheck && staticEval >= beta && depth <= rfpDepthLimit && canNullMove && pliesFromRoot > 0 && staticEval < 1000000000) {
+    if (!isPVNode && !isKingInCheck && staticEval >= beta && depth <= rfpDepthLimit && canNullMove && pliesFromRoot > 0) {
         int rfpScore = staticEval - rfpMargin * (depth);
         if (rfpScore >= beta) {
             return beta > -1000000000 ? (staticEval + beta) / 2 : staticEval;
         }
     }
-    if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && !bb.isKingAndPawnEndgame()) {
+    if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && !bb.isKingAndPawnEndgame() && abs(staticEval) < 1000000000) {
         Move nullMove = Move();
         ss[pliesFromRoot].move = nullMove;
         uint64_t newHash = bb.move(nullMove, zHash);
@@ -3553,7 +3584,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
         bb.undoMove(nullMove);
         if (evalNullMove >= beta) {
-            return beta;
+            return evalNullMove;
         }
         bestScore = std::max(bestScore, evalNullMove);
     }
@@ -3633,7 +3664,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     bool lmr = !isPVNode && depth >= 3;
     int futilityVal = 0;
     int i;
-    int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 4 : quietsToCheckTable[depth]) : 999;
+    int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 5 : quietsToCheckTable[depth]) : 999;
+    int quietMoves = 0;
     for (i = 0; i < moves.size(); i++) {
         selectionSort(moves, i);
         if (moves[i] == currBestMove && delayedMoveGen)
@@ -3644,19 +3676,22 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         int endPos = moves[i].getEndPos();
         ss[pliesFromRoot].move = moves[i];
         uint64_t newHash = bb.move(moves[i], zHash);
+        int priority = moves[i].getMovePriority();
         int score = 0;
+        if (moveType == MoveType::NORMAL) {
+            quietMoves++;
+        }
         if (!bb.isRepeatedPosition()) {
-            bool canLMR = (lmr && i > 0 && moves[i].getMovePriority() < 15001 && moveType != MoveType::CAPTURE);
-
+            bool canLMR = (lmr && i > 0 &&priority < 15001 && moveType != MoveType::CAPTURE);
             int lmrDepth = depth;
             if (canLMR) {
-                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + (historyTable[sideToMove][movePiece][endPos] / historyReductionFactor) + (!improving && pliesFromRoot >= 2) - isKingInCheck;
+                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + historyTable[sideToMove][movePiece][endPos] / historyReductionFactor + (!improving && pliesFromRoot >= 2) - isKingInCheck;
                 lmrDepth = depth - std::clamp(reducedDepth, 1, depth);
             }
 
             //pruning at low depth
             if (!isKingInCheck && !isPVNode && pliesFromRoot > 0 && bestScore > -1000000000) {
-                futilityVal = staticEval + (bestScore < staticEval - 5900 ? 14100 : 7800) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
+                futilityVal = staticEval + (bestScore < staticEval ? 12500 : 7250) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
                 if (lmrDepth <= futilityDepthLimit && futilityVal <= alpha && moveType == MoveType::NORMAL) {
                     if (bestScore <= futilityVal && abs(bestScore) < 1000000000) {
                         bestScore = (bestScore + futilityVal) / 2;
@@ -3664,7 +3699,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     bb.undoMove(moves[i]);
                     break;
                 }
-                if (i > LMPLimit) {
+                if (quietMoves > LMPLimit) {
                     bb.undoMove(moves[i]);
                     break;
                 }
@@ -3679,11 +3714,12 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
             }
             //Late move reduction, reduce move not high in priority
-
+            
             if (canLMR) {
                 int reducedScore = -search(bb, ss, lmrDepth, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1);
 
                 if (reducedScore > alpha) {
+                    
                     score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1);
                 }
                 else {
@@ -3712,10 +3748,9 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             bestMove = moves[i].toUci();
         }
         if (score >= beta) {
-
+            
             if (moveType == MoveType::NORMAL) {
                 int bonus = staticEval < alpha ? (depth + 1) * (depth + 1) : depth * depth;
-
                 int toAdd = (16 * bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
                 historyTable[sideToMove][movePiece][endPos] += toAdd;
                 for (int j = 0; j < i; j++) {
@@ -3728,7 +3763,6 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     }
                 }
             }
-
             if (!isRepeated)
                 ttable->set(zHash, TableEntry(zHash, moves[i], NodeFlag::CUTNODE, depth, score, evalDepthZero));
             //If the move is not high in priority and it is not in the killer move yet,save it to the killer move array 
@@ -3860,7 +3894,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         if (maxThreadDepth < i) {
             maxThreadDepth = i;
             finalBestMove = bestMove;
-            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " << bestMove << std::endl;
+            std::cout << "info score cp " << currEval/100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " << bestMove << std::endl;
         }
 
         if (duration.count() > time)
@@ -3874,7 +3908,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         killerMoves[i][1] = Move();
     }
 
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 41; i++) {
         std::cout << "Depth " << i << " Node pruned: " << cnt[i] << std::endl;
     }
     std::cout << "Total node evaluated: " << bb.cntNode << " Pawn hash found: " << bb.cntNode2 << std::endl;
@@ -4047,7 +4081,7 @@ void uciCommunication()
         if (token == "uci")
         {
             std::cout << "option name maxPlyQSearch type spin default 6 min 1 max 12" << std::endl;
-            std::cout << "option name futilityMarginQSearch type spin default 22000 min 5000 max 50000" << std::endl;
+            std::cout << "option name futilityMarginQSearch type spin default 23500 min 5000 max 50000" << std::endl;
             std::cout << "option name SEEMarginQSearch type spin default -34 min -400 max 400" << std::endl;
             std::cout << "option name SEENormalMargin type spin default -17 min -25 max -10" << std::endl;
             std::cout << "option name IIDReductionDepth type spin default 2 min 0 max 4" << std::endl;
@@ -4153,7 +4187,7 @@ void uciCommunication()
             running = false;
         }
         else if (token == "setoption") {
-            
+            /*
             std::string tmp;
             std::string optionName;
             std::string value;
@@ -4205,7 +4239,7 @@ void uciCommunication()
             else if (optionName == "SEEMargin") {
                 SEEMargin = std::stoi(value);
             }
-       
+       */
         }
         else
         {
@@ -4222,6 +4256,7 @@ int main(int argn, char** argv) {
     //tb_init((PATH + "syzygy").c_str());
     //testMoveGen();
     //testMoveSorting();
+    //testEvaluation();
     uciCommunication();
     return 0;
 }
