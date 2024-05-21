@@ -86,37 +86,6 @@ public:
     }
 };
 
-class EvalEntry {
-public:
-    uint64_t data1;
-    EvalEntry() {
-        data1 = 0;
-    }
-    EvalEntry(uint64_t zHash,int eval) {
-        setKey(zHash);
-        setEval(eval);
-    }
-    bool isValid() {
-        return data1;
-    }
-    void setKey(uint64_t zHash) {
-        data1 &= ~(0xFFFFFFFFull); // Clear the previous value
-        data1 |= ((zHash>>32));
-    }
-    void setEval(int eval) {
-        data1 &= ~(0xFFFFFFFFull << 32); // Clear the previous value
-        data1 |= static_cast<uint64_t>(eval) << 32;
-    }
-
-    int getEval() const {
-        return static_cast<int>((data1 >> 32) & 0xFFFFFFFFull);
-    }
-
-    uint32_t getHash() const {
-        return static_cast<uint32_t>(data1 & 0xFFFFFFFFull);
-    }
-};
-
 class TranspositionTable {
 private:
     
@@ -148,38 +117,6 @@ public:
         for (int i = BUCKET_SIZE - 1; i > 0; i--) {
             arrEntry[key][i] = arrEntry[key][i - 1];
         }
-        arrEntry[key][0] = t;
-    }
-
-    void prefetch(uint64_t zHash) {
-        _mm_prefetch((const char*)&arrEntry[zHash&MASK_HASH][0], _MM_HINT_T0);
-    }
-};
-
-class EvalTable {
-private:
-    EvalEntry arrEntry[TABLE_SIZE][BUCKET_SIZE-1];
-public:
-    
-    int nCollisions = 0;
-    EvalTable() {  
-
-    }
-    EvalEntry* find(uint64_t zHash) {
-        uint64_t key = zHash & MASK_HASH;
-        if (arrEntry[key][0].getHash() == static_cast<uint32_t>(zHash>>32)) {
-            return &arrEntry[key][0];
-        }
-        else if (arrEntry[key][1].getHash() == static_cast<uint32_t>(zHash >> 32)) {
-            return &arrEntry[key][1];
-        }
-        return nullptr;
-    }
-    void set(uint64_t zHash, EvalEntry t) {
-        uint64_t key = zHash & MASK_HASH;
-        //if (zHash != arrEntry[key][0].zHash && zHash != arrEntry[key][1].zHash && zHash != arrEntry[key][2].zHash&& arrEntry[key][2].zHash!=0)
-            //nCollisions++;
-        arrEntry[key][1] = arrEntry[key][0];
         arrEntry[key][0] = t;
     }
 };
@@ -219,53 +156,4 @@ public:
         return false;
     }
 
-};
-
-struct PawnEntry {
-    uint64_t key;
-    uint64_t passedPawnsSet;
-    int kingPos[2];
-    int scorePawn[2];
-    float attackersPawn;
-    int atkUnitsPawn;
-    PawnEntry() {
-        key = 0;
-        passedPawnsSet = 0;
-        kingPos[0] = 0;
-        kingPos[1] = 0;
-        scorePawn[0] = 0;
-        scorePawn[1] = 0;
-        attackersPawn = 0.0f;
-        atkUnitsPawn = 0;
-    }
-    void reset() {
-        key = 0;
-        passedPawnsSet = 0;
-        kingPos[0] = 0;
-        kingPos[1] = 0;
-        scorePawn[0] = 0;
-        scorePawn[1] = 0;
-        attackersPawn = 0.0f;
-        atkUnitsPawn = 0;
-    }
-};
-const int PAWN_HASH_SIZE = 0x400;
-const int MASK_PAWN = PAWN_HASH_SIZE - 1;
-PawnEntry pawnEntryDefault = PawnEntry();
-class PawnHashTable {
-private:
-    PawnEntry arrEntry[PAWN_HASH_SIZE];
-public:
-    PawnEntry find(uint64_t orgKey,int kingPos1,int kingPos2) const {
-        uint64_t key = orgKey & MASK_PAWN;
-        if (arrEntry[key].key == orgKey)
-            return arrEntry[key];
-        return pawnEntryDefault;
-    }
-    PawnEntry& find(uint64_t orgKey) {
-        return arrEntry[orgKey & MASK_PAWN];
-    }
-    void set(uint64_t orgKey,PawnEntry& entry) {
-        arrEntry[orgKey & MASK_PAWN] = entry;
-    }
 };

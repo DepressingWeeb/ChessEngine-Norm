@@ -19,7 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\ChessAI.h" />
+    <ClInclude Include="bitboard.h" />
     <ClInclude Include="include\constant_bitboard.h" />
     <ClInclude Include="include\constant_eval.h" />
     <ClInclude Include="include\constant_hash.h" />
@@ -29,7 +29,7 @@
     <ClInclude Include="include\utils.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\ChessAI.cpp" />
+    <ClCompile Include="src\bitboard.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
