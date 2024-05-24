@@ -157,3 +157,21 @@ public:
     }
 
 };
+
+const int PVSIZE = 0x4000;
+const int MASK = PVSIZE - 1;
+
+class PVTable {
+private:
+    uint64_t key[PVSIZE];
+public:
+    void set(uint64_t zHash) {
+        key[zHash & MASK] = zHash;
+    }
+    bool find(uint64_t zHash) {
+        return key[zHash & MASK] == zHash;
+    }
+    void clear() {
+        memset(key, 0, sizeof(key));
+    }
+};

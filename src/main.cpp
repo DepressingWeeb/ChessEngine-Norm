@@ -30,6 +30,7 @@ protected:
     int nMovesOutOfBook;
     std::chrono::steady_clock::time_point searchStartTime;
     int timeLimitInMs;
+
 public:
     std::string bestMove;
     int currEval;
@@ -40,13 +41,13 @@ public:
     void undoMove(Move move);
     void parseFEN(std::string fen);
     Move uciToMove(std::string uci);
-    void selectionSort(MoveVector& moves, int currIndex);
+    void selectionSort(MoveVector& moves,int* movePriority, int currIndex);
     void parseMoves(std::vector<std::string> moves);
-    int qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf,int pliesFromRoot);
+    int qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf, int pliesFromRoot);
     int search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV = false, bool canNullMove = true);
     int iterativeDeepening(int depth, int timeLeft = -1, int moveTime = -1);
-    int singularSearch(BitBoard& bb, SearchStack* const ss,int depth, int maxDepth, int alpha, int beta,uint64_t zHash, int pliesFromRoot,bool isPV,Move excluded);
-    void moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove);
+    int singularSearch(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, Move excluded);
+    void moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove,int* movePriority);
     std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1);
     void initTranspositionTable();
 };
@@ -168,31 +169,31 @@ std::string ChessEngine::findBestMove(int depth, int timeLeft, int moveTime) {
             return bestMove;
         }
     }
-    
+
     else {
         int evaluation = iterativeDeepening(depth, timeLeft, moveTime);
         return bestMove;
     }
 }
 
-void ChessEngine::selectionSort(MoveVector& moves, int currIndex) {
+void ChessEngine::selectionSort(MoveVector& moves,int* movePriority, int currIndex) {
     int maxIndex = 0;
     int currMaxPriority = -10000000;
     int currPriority;
     for (int i = currIndex; i < moves.size(); i++) {
-        currPriority = moves[i].getMovePriority();
+        currPriority = movePriority[i];
         if (currPriority > currMaxPriority) {
             currMaxPriority = currPriority;
             maxIndex = i;
         }
     }
-    Move tmp = moves[maxIndex];
-    moves[maxIndex] = moves[currIndex];
-    moves[currIndex] = tmp;
+    std::swap(moves[currIndex], moves[maxIndex]);
+    std::swap(movePriority[currIndex], movePriority[maxIndex]);
 }
 
-void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove) {
+void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove, int* movePriority) {
     uint32_t first32Bit = currBestMove.getFirst32Bit();
+
     if (!killerMoves[pliesFromRoot][0].isNullMove()) {
         for (int i = 0; i < moves.size(); i++) {
             Piece movePiece = moves[i].getMovePiece();
@@ -203,73 +204,71 @@ void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoo
             int endPos = moves[i].getEndPos();
             uint32_t move32Bit = moves[i].getFirst32Bit();
             if (move32Bit == first32Bit) {
-                moves[i].setMovePriority(1000000);
+                movePriority[i] = 1000000;
                 continue;
             }
             else if (moves[i] == killerMoves[pliesFromRoot][0]) {
-                moves[i].setMovePriority(15000);
+                movePriority[i] = 15000;
                 continue;
             }
             else if (moves[i] == killerMoves[pliesFromRoot][1]) {
-                moves[i].setMovePriority(14000);
+                movePriority[i] = 14000;
                 continue;
             }
             switch (moveType)
             {
             case NORMAL:
             {
-                moves[i].setMovePriority(historyTable[sideToMove][movePiece][endPos]);
+                movePriority[i] = historyTable[sideToMove][movePiece][endPos];
             }
             break;
             case CAPTURE:
                 if (pieceValue[capturePiece] >= pieceValue[movePiece])
-                    moves[i].setMovePriority(pieceValue[capturePiece] * 110 - pieceValue[movePiece]);
+                    movePriority[i] = pieceValue[capturePiece] * 110 - pieceValue[movePiece];
                 else {
                     if (bb.SEE_GE(moves[i], -2))
-                        moves[i].setMovePriority(pieceValue[capturePiece] * 110 - pieceValue[movePiece]);
+                        movePriority[i] = pieceValue[capturePiece] * 110 - pieceValue[movePiece];
                     else {
-                        moves[i].setMovePriority((pieceValue[capturePiece]- pieceValue[movePiece])*100);
+                        movePriority[i] = (pieceValue[capturePiece] - pieceValue[movePiece]) * 100;
                     }
                 }
                 break;
             case EN_PASSANT:
-                moves[i].setMovePriority(10000);
+                movePriority[i] = 10000;
                 break;
             case CASTLE_KINGSIDE:
-                moves[i].setMovePriority(historyTable[sideToMove][movePiece][endPos]);
+                movePriority[i] = historyTable[sideToMove][movePiece][endPos];
                 break;
             case CASTLE_QUEENSIDE:
-                moves[i].setMovePriority(historyTable[sideToMove][movePiece][endPos]);
+                movePriority[i] = historyTable[sideToMove][movePiece][endPos];
                 break;
             case PROMOTION_QUEEN:
-                moves[i].setMovePriority(45000);
+                movePriority[i] = 45000;
                 break;
             case PROMOTION_ROOK:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_KNIGHT:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_BISHOP:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_QUEEN_AND_CAPTURE:
-                moves[i].setMovePriority(45000 + pieceValue[capturePiece] * 100);
+                movePriority[i] = 45000 + pieceValue[capturePiece] * 100;
                 break;
             case PROMOTION_ROOK_AND_CAPTURE:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_KNIGHT_AND_CAPTURE:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_BISHOP_AND_CAPTURE:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             default:
                 break;
             }
-
-
         }
     }
     else {
@@ -281,213 +280,65 @@ void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoo
             int startPos = moves[i].getStartPos();
             int endPos = moves[i].getEndPos();
             if (moves[i].getFirst32Bit() == first32Bit) {
-                moves[i].setMovePriority(1000000);
+                movePriority[i] = 1000000;
                 continue;
             }
             switch (moveType)
             {
             case NORMAL:
-                moves[i].setMovePriority(historyTable[sideToMove][movePiece][endPos]);
+                movePriority[i] = historyTable[sideToMove][movePiece][endPos];
                 break;
             case CAPTURE:
                 if (pieceValue[capturePiece] >= pieceValue[movePiece])
-                    moves[i].setMovePriority(pieceValue[capturePiece] * 110 - pieceValue[movePiece]);
+                    movePriority[i] = pieceValue[capturePiece] * 110 - pieceValue[movePiece];
                 else {
                     if (bb.SEE_GE(moves[i], -2))
-                        moves[i].setMovePriority(pieceValue[capturePiece] * 110 - pieceValue[movePiece]);
+                        movePriority[i] = pieceValue[capturePiece] * 110 - pieceValue[movePiece];
                     else {
-                        moves[i].setMovePriority((pieceValue[capturePiece] - pieceValue[movePiece]) * 100);
+                        movePriority[i] = (pieceValue[capturePiece] - pieceValue[movePiece]) * 100;
                     }
                 }
                 break;
             case EN_PASSANT:
-                moves[i].setMovePriority(10000);
+                movePriority[i] = 10000;
                 break;
             case CASTLE_KINGSIDE:
-                moves[i].setMovePriority(historyTable[sideToMove][movePiece][endPos]);
+                movePriority[i] = historyTable[sideToMove][movePiece][endPos];
                 break;
             case CASTLE_QUEENSIDE:
-                moves[i].setMovePriority(historyTable[sideToMove][movePiece][endPos]);
+                movePriority[i] = historyTable[sideToMove][movePiece][endPos];
                 break;
             case PROMOTION_QUEEN:
-                moves[i].setMovePriority(45000);
+                movePriority[i] = 45000;
                 break;
             case PROMOTION_ROOK:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_KNIGHT:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_BISHOP:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_QUEEN_AND_CAPTURE:
-                moves[i].setMovePriority(45000 + pieceValue[capturePiece] * 100);
+                movePriority[i] = 45000 + pieceValue[capturePiece] * 100;
                 break;
             case PROMOTION_ROOK_AND_CAPTURE:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_KNIGHT_AND_CAPTURE:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             case PROMOTION_BISHOP_AND_CAPTURE:
-                moves[i].setMovePriority(-30000);
+                movePriority[i] = -30000;
                 break;
             default:
                 break;
             }
-
-
-
         }
     }
 }
-int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss,int depth,int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, Move excluded) {
-    bool isKingInCheck = bb.isKingInCheck();
-    //generate legal moves
-    auto& moves = ss[pliesFromRoot].moves;
-    bb.getLegalMovesAlt(moves);
-    if (moves.size() == 0) {
-        if (isKingInCheck)
-            return -2000000000 + pliesFromRoot;
-        return 0;
-    }
-    moveOrdering(bb, moves, pliesFromRoot, excluded);
-    int staticEval = ss[pliesFromRoot].eval;
-    int bestScore = -2e9;
-    bool improving = pliesFromRoot>=2 && staticEval>ss[pliesFromRoot-2].eval;
-    ss[pliesFromRoot].eval = staticEval;
-    Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
-    Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
-    bool lmr = depth >= 3;
-    int futilityVal = 0;
-    int i;
-    int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 5 : quietsToCheckTable[depth]) : 999;
-    int quietMoves = 0;
-    bool isRepeated = false;
-    for (i = 0; i < moves.size(); i++) {
-        selectionSort(moves, i);
-        if (i==0)
-            continue;
-        isRepeated = false;
-        MoveType moveType = moves[i].getMoveType();
-        Piece movePiece = moves[i].getMovePiece();
-        int endPos = moves[i].getEndPos();
-        ss[pliesFromRoot].move = moves[i];
-        uint64_t newHash = bb.move(moves[i], zHash);
-        int priority = moves[i].getMovePriority();
-        int score = 0;
-        if (moveType == MoveType::NORMAL) {
-            quietMoves++;
-        }
-        if (!bb.isRepeatedPosition()) {
-            bool canLMR = (lmr && i > 0 && priority < 15001 && moveType != MoveType::CAPTURE);
-            int lmrDepth = depth;
-            if (canLMR) {
-                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + historyTable[sideToMove][movePiece][endPos] / historyReductionFactor + (!improving && pliesFromRoot >= 2) - isKingInCheck;
-                lmrDepth = depth - std::clamp(reducedDepth, 1, depth);
-            }
-
-            //pruning at low depth
-            if (!isKingInCheck  && pliesFromRoot > 0 && bestScore > -1000000000) {
-                futilityVal = staticEval + (bestScore < staticEval ? 12500 : 7250) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
-                if (lmrDepth <= futilityDepthLimit && futilityVal <= alpha && moveType == MoveType::NORMAL) {
-                    if (bestScore <= futilityVal && abs(bestScore) < 1000000000) {
-                        bestScore = (bestScore + futilityVal) / 2;
-                    }
-                    bb.undoMove(moves[i]);
-                    break;
-                }
-                if (quietMoves > LMPLimit) {
-                    bb.undoMove(moves[i]);
-                    break;
-                }
-                if (!isKingInCheck && moveType == MoveType::NORMAL && lmrDepth < 8) {
-                    bb.undoMove(moves[i]);
-                    if (!bb.SEE_GE(moves[i], SEENormalMargin * lmrDepth * lmrDepth)) {
-                        continue;
-                    }
-                    bb.move(moves[i], zHash);
-                }
-
-
-            }
-            //Late move reduction, reduce move not high in priority
-
-            if (canLMR) {
-                int reducedScore = -search(bb, ss, lmrDepth, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1);
-
-                if (reducedScore > alpha) {
-
-                    score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1);
-                }
-                else {
-                    score = reducedScore;
-                }
-            }
-            else {
-
-                //PVS
-                if (i >= 1) {
-                    score = -search(bb, ss, depth - 1, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1, false);
-                    if (score > alpha) {
-                        score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, false);
-                    }
-                }
-                else {
-                    score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, false);
-                }
-            }
-        }
-        else {
-            isRepeated = true;
-        }
-        bb.undoMove(moves[i]);
-        if (pliesFromRoot == 0 && score > bestScore) {
-            bestMove = moves[i].toUci();
-        }
-        if (score >= beta) {
-
-            if (moveType == MoveType::NORMAL) {
-                int bonus = staticEval < alpha ? (depth + 1) * (depth + 1) : depth * depth;
-                int toAdd = (16 * bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
-                historyTable[sideToMove][movePiece][endPos] += toAdd;
-                for (int j = 0; j < i; j++) {
-                    MoveType moveType2 = moves[j].getMoveType();
-                    Piece movePiece2 = moves[j].getMovePiece();
-                    int endPos2 = moves[j].getEndPos();
-                    if (moveType2 == MoveType::NORMAL) {
-                        int toMinus = (16 * bonus + historyTable[sideToMove][movePiece2][endPos2] * bonus / 512);
-                        historyTable[sideToMove][movePiece2][endPos2] -= toMinus;
-                    }
-                }
-            }
-            //If the move is not high in priority and it is not in the killer move yet,save it to the killer move array 
-
-            if (moves[i].getMovePriority() < 15001 && !(moves[i] == killerMoves[pliesFromRoot][0])) {
-                if (moves[i] == killerMoves[pliesFromRoot][1]) {
-                    std::swap(killerMoves[pliesFromRoot][0], killerMoves[pliesFromRoot][1]);
-                }
-                else {
-                    killerMoves[pliesFromRoot][1] = killerMoves[pliesFromRoot][0];
-                    killerMoves[pliesFromRoot][0] = moves[i];
-                }
-            }
-            return score;
-        }
-        if (score > bestScore) {
-            bestScore = score;
-        }
-        if (score > alpha) {
-            alpha = score;
-
-        }
-
-    }
-
-
-}
-int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf,int pliesFromRoot) {
+int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf, int pliesFromRoot) {
     //qNodeCnt++;
     int bestScore = -2000000000;
     bool isKingInCheck = bb.isKingInCheck();
@@ -507,6 +358,7 @@ int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta
         return bestScore;
     }
     auto& moves = ss[pliesFromRoot].moves;
+    auto& movePriority = ss[pliesFromRoot].movePriority;
     if (isKingInCheck) {
         bb.getLegalMovesAlt(moves);
     }
@@ -521,13 +373,14 @@ int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta
 
     }
     Move nullMove = Move();
-    moveOrdering(bb, moves, 63, nullMove);
+    moveOrdering(bb, moves, 63, nullMove,movePriority);
     bool isEndgame = bb.isEndgame();
     for (int i = 0; i < moves.size(); i++) {
-        selectionSort(moves, i);
+        selectionSort(moves, movePriority,i);
         MoveType type = moves[i].getMoveType();
         int endPos = moves[i].getEndPos();
         Side sideToMove = moves[i].getSideToMove();
+        int priority = movePriority[i];
         if (type == MoveType::CAPTURE && (pieceValue[moves[i].getMovePiece()] - pieceValue[moves[i].getCapturePiece()] > 100) && (bb.getPawnAttackSquares(sideToMove, endPos) & bb.pieceBB[!sideToMove][Piece::pawn]) && !isEndgame) {
             continue;
         }
@@ -539,6 +392,7 @@ int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta
                 bestScore = std::max(bestScore, pieceValue[moves[i].getCapturePiece()] * 100 + 20000 + bestScore);
                 continue;
             }
+            
             if (pliesFromLeaf < maxPlyQSearch - 1) {
 
                 if (futilityBase <= alpha && !bb.SEE_GE(moves[i], 2))
@@ -546,16 +400,15 @@ int ChessEngine::qSearch(BitBoard& bb,SearchStack* const ss, int alpha, int beta
                     bestScore = std::max(bestScore, futilityBase);
                     continue;
                 }
-                bool negativeSEE = !bb.SEE_GE(moves[i], SEEMarginQSearch);
-                if (negativeSEE) {
+                if (priority < 0)
                     continue;
-                }
                 
+
             }
+            
         }
-        
         bb.move(moves[i]);
-        int score = -qSearch(bb,ss, -beta, -alpha, endPos, pliesFromLeaf + 1,pliesFromRoot+1);
+        int score = -qSearch(bb, ss, -beta, -alpha, endPos, pliesFromLeaf + 1, pliesFromRoot + 1);
         bb.undoMove(moves[i]);
         if (score > bestScore)
             bestScore = score;
@@ -580,10 +433,10 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     if (isKingInCheck && pliesFromRoot < maxDepth * 2) {
         depth++;
     }
-    if (depth <= 0 || pliesFromRoot>=maxDepth*2) {
-        return qSearch(bb,ss, alpha, beta, -1,0,pliesFromRoot);
+    if (depth <= 0 || pliesFromRoot >= maxDepth * 2) {
+        return qSearch(bb, ss, alpha, beta, -1, 0, pliesFromRoot);
     }
-    
+
     Move potentialBestMove = Move();
     TableEntry* entry = ttable->find(zHash);
     bool isPVNode = false;
@@ -625,11 +478,23 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     if (isPVNode && (pliesFromRoot & 0b111) == 7 && pliesFromRoot < maxDepth * 2) {
         depth++;
     }
-    
+
     int bestScore = -2000000000;
     int beginAlpha = alpha;
     bool isEndgame = bb.isEndgame();
-    int evalDepthZero = isFoundInTable ? entryEval : bb.evaluate(alpha, beta);
+    int evalDepthZero = isFoundInTable ? entryEval : bb.evaluate(alpha,beta);
+    /*
+    if (isFoundInTable && mainNodeCnt%10000==9999) {
+        std::cout << "----------------Node Info----------------" << std::endl;
+        std::cout << entryDepth << std::endl;
+        std::cout << evalDepthZero << std::endl;
+        std::cout << entryScore << std::endl;
+        std::cout << potentialBestMove.toUci() << std::endl;
+        std::cout << static_cast<int>(expectedNode) << std::endl;
+        std::cout << "----------------End Info----------------" << std::endl;
+
+    }
+    */
     ss[pliesFromRoot].eval = evalDepthZero;
     bool improving = pliesFromRoot >= 2 && evalDepthZero > ss[pliesFromRoot - 2].eval;
     int staticEval = isFoundInTable ? entryScore : evalDepthZero;
@@ -659,6 +524,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     NodeFlag flag = NodeFlag::ALLNODE;
     Move currBestMove = potentialBestMove;
     bool delayedMoveGen = pliesFromRoot > 0;
+
     //Delay move generation: test the best move from previous iteration first
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
     if (!potentialBestMove.isNullMove() && delayedMoveGen && bb.isValidMove(potentialBestMove)) {
@@ -669,22 +535,20 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         ss[pliesFromRoot].move = potentialBestMove;
         uint64_t newHash = bb.move(potentialBestMove, zHash);
         int score = 0;
-        
+
         if (!bb.isRepeatedPosition()) {
             score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, isPVNode);
         }
         else
             isRepeated = true;
         bb.undoMove(potentialBestMove);
-        if (pliesFromRoot == 0 && score > bestScore)
-            bestMove = potentialBestMove.toUci();
         if (score >= beta) {
             if (!isRepeated)
                 ttable->set(zHash, TableEntry(zHash, potentialBestMove, NodeFlag::CUTNODE, depth, score, evalDepthZero));
             if (moveType == MoveType::NORMAL || moveType == MoveType::CASTLE_KINGSIDE || moveType == MoveType::CASTLE_QUEENSIDE) {
                 int depthBonus = depth + (staticEval < alpha);
                 int bonus = depthBonus * depthBonus;
-                historyTable[sideToMove][movePiece][endPos] += (16*bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
+                historyTable[sideToMove][movePiece][endPos] += (16 * bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
             }
             if (moveType == MoveType::NORMAL && !(potentialBestMove == killerMoves[pliesFromRoot][0])) {
                 if (potentialBestMove == killerMoves[pliesFromRoot][1]) {
@@ -712,22 +576,16 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
     //generate legal moves
     auto& moves = ss[pliesFromRoot].moves;
+    auto& movePriority = ss[pliesFromRoot].movePriority;
     bb.getLegalMovesAlt(moves);
     if (moves.size() == 0) {
         if (isKingInCheck)
             return -2000000000 + pliesFromRoot;
         return 0;
     }
-
     
-    /*
-    Razoring
-    if (!isPVNode && !isKingInCheck && staticEval <=alpha-25000 &&alpha==beta-1 && depth < rfpDepthLimit && pliesFromRoot > 0 && staticEval < 1000000000) {
-        cnt[depth]++;
-        return qSearch(bb, alpha, beta, -1, 0);
-    }
-    */
-    moveOrdering(bb, moves, pliesFromRoot, currBestMove);
+    moveOrdering(bb, moves, pliesFromRoot, currBestMove,movePriority);
+
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
     bool lmr = !isPVNode && depth >= 3;
     int futilityVal = 0;
@@ -735,7 +593,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 5 : quietsToCheckTable[depth]) : 999;
     int quietMoves = 0;
     for (i = 0; i < moves.size(); i++) {
-        selectionSort(moves, i);
+        selectionSort(moves,movePriority, i);
         if (moves[i] == currBestMove && delayedMoveGen)
             continue;
         isRepeated = false;
@@ -744,16 +602,16 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         int endPos = moves[i].getEndPos();
         ss[pliesFromRoot].move = moves[i];
         uint64_t newHash = bb.move(moves[i], zHash);
-        int priority = moves[i].getMovePriority();
+        int priority = movePriority[i];
         int score = 0;
         if (moveType == MoveType::NORMAL) {
             quietMoves++;
         }
         if (!bb.isRepeatedPosition()) {
-            bool canLMR = (lmr && i > 0 &&priority < 15001 && moveType != MoveType::CAPTURE);
+            bool canLMR = (lmr && i > 0 && priority < 15001 && moveType != MoveType::CAPTURE);
             int lmrDepth = depth;
             if (canLMR) {
-                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) +historyTable[sideToMove][movePiece][endPos]/historyReductionFactor + (!improving && pliesFromRoot >= 2) - isKingInCheck;
+                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + historyTable[sideToMove][movePiece][endPos] / historyReductionFactor + (!improving && pliesFromRoot >= 2) - isKingInCheck;
                 lmrDepth = depth - std::clamp(reducedDepth, 1, depth);
             }
 
@@ -767,13 +625,13 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     bb.undoMove(moves[i]);
                     break;
                 }
-                
+
                 if (quietMoves > LMPLimit) {
                     bb.undoMove(moves[i]);
                     break;
                 }
-                
-                if (!isPVNode && !isKingInCheck && moveType == MoveType::NORMAL && lmrDepth<8) {
+
+                if (!isPVNode && !isKingInCheck && moveType == MoveType::NORMAL && lmrDepth < 8) {
                     bb.undoMove(moves[i]);
                     if (!bb.SEE_GE(moves[i], SEENormalMargin * lmrDepth * lmrDepth)) {
                         continue;
@@ -784,12 +642,12 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
             }
             //Late move reduction, reduce move not high in priority
-            
+
             if (canLMR) {
                 int reducedScore = -search(bb, ss, lmrDepth, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1);
 
                 if (reducedScore > alpha) {
-                    
+
                     score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1);
                 }
                 else {
@@ -814,22 +672,23 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             isRepeated = true;
         }
         bb.undoMove(moves[i]);
-        if (pliesFromRoot == 0 && score > bestScore) {
+        if (pliesFromRoot == 0 && score > alpha) {
             bestMove = moves[i].toUci();
         }
         if (score >= beta) {
-            
+
             if (moveType == MoveType::NORMAL) {
                 int depthBonus = depth + (staticEval < alpha);
-                int bonus = depthBonus*depthBonus;
-                int toAdd = (16*bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
+                int bonus = depthBonus * depthBonus;
+                int toAdd = (16 * bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
                 historyTable[sideToMove][movePiece][endPos] += toAdd;
+
                 for (int j = 0; j < i; j++) {
                     MoveType moveType2 = moves[j].getMoveType();
                     Piece movePiece2 = moves[j].getMovePiece();
                     int endPos2 = moves[j].getEndPos();
                     if (moveType2 == MoveType::NORMAL) {
-                        int toMinus = (16*bonus + historyTable[sideToMove][movePiece2][endPos2] * bonus / 512);
+                        int toMinus = (16 * bonus + historyTable[sideToMove][movePiece2][endPos2] * bonus / 512);
                         historyTable[sideToMove][movePiece2][endPos2] -= toMinus;
                     }
                 }
@@ -838,7 +697,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                 ttable->set(zHash, TableEntry(zHash, moves[i], NodeFlag::CUTNODE, depth, score, evalDepthZero));
             //If the move is not high in priority and it is not in the killer move yet,save it to the killer move array 
 
-            if (moves[i].getMovePriority() < 15001 && !(moves[i] == killerMoves[pliesFromRoot][0])) {
+            if (priority < 15001 && !(moves[i] == killerMoves[pliesFromRoot][0])) {
                 if (moves[i] == killerMoves[pliesFromRoot][1]) {
                     std::swap(killerMoves[pliesFromRoot][0], killerMoves[pliesFromRoot][1]);
                 }
@@ -918,7 +777,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
                 catch (int x)
                 {
                     if (x == 404) {
-                        bestMove = lastBestMove;
+                        //bestMove = lastBestMove;
                         break;
                     }
                 }
@@ -964,7 +823,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         if (maxThreadDepth < i) {
             maxThreadDepth = i;
             finalBestMove = bestMove;
-            std::cout << "info score cp " << currEval/100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " << bestMove << std::endl;
+            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " << bestMove << std::endl;
         }
 
         if (duration.count() > time)
@@ -1018,7 +877,7 @@ public:
 
     std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1) {
         for (int i = 0; i < nThreads; i++) {
-            threads[i] = std::thread(&ChessEngine::iterativeDeepening, engines[i], i < nThreads/2 ? 1 : 2, timeLeft, moveTime);
+            threads[i] = std::thread(&ChessEngine::iterativeDeepening, engines[i], i < nThreads / 2 ? 1 : 2, timeLeft, moveTime);
         }
         for (int i = 0; i < nThreads; i++) {
             threads[i].join();
@@ -1251,7 +1110,7 @@ void uciCommunication()
             running = false;
         }
         else if (token == "setoption") {
-            
+
             std::string tmp;
             std::string optionName;
             std::string value;
@@ -1298,14 +1157,14 @@ void uciCommunication()
             else if (optionName == "rfpDepthLimit") {
                 rfpDepthLimit = std::stoi(value);
             }
-            
+
             else if (optionName == "SEENormalMargin") {
                 SEENormalMargin = std::stoi(value);
             }
             else if (optionName == "rfpMargin") {
                 rfpMargin = std::stoi(value);
             }
-            
+
             else if (optionName == "futilityMargin") {
                 futilityMargin = std::stoi(value);
             }
@@ -1326,19 +1185,6 @@ void uciCommunication()
     }
 
 }
-void testMoveSorting() {
-    std::string fen;
-    std::getline(std::cin, fen);
-    ChessEngine engine = ChessEngine(fen);
-    MoveVector moves;
-    engine.bb.getLegalMovesAlt(moves);
-    Move nullMove = Move();
-    engine.moveOrdering(engine.bb, moves, 0, nullMove);
-    for (int i = 0; i < moves.size(); i++) {
-        std::cout << moves[i].toUci() << " " << moves[i].getMovePriority() << std::endl;
-    }
-}
-
 int main(int argn, char** argv) {
     //tb_init((PATH + "syzygy").c_str());
     //testMoveGen();

@@ -2583,22 +2583,17 @@ int BitBoard::evaluate(int alpha, int beta) {
     for (int side = 0; side < 2; side++) {
         uint64_t kingAttacks = getKingAttackSquares(kingPos[side]);
         int nPawnsSurroundKing = popcount64(kingAttacks & pieceBB[side][Piece::pawn]);
-        int nOpenFilesKing = 0;
         int nSemiOpenFilesKing = 0;
         if (fileKing[side] == 0) {
-            nOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side]] & pawnsBBAll));
             nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] + 1] & pieceBB[side][Piece::pawn]));
         }
         else if (fileKing[side] == 7) {
-            nOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pawnsBBAll)) + (!(arrAfterPawn[side][kingPos[side] - 1] & pawnsBBAll));
             nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] - 1] & pieceBB[side][Piece::pawn]));
         }
         else {
-            nOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pawnsBBAll)) + (!(arrAfterPawn[side][kingPos[side] - 1] & pawnsBBAll)) + (!(arrAfterPawn[side][kingPos[side] + 1] & pawnsBBAll));
             nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] + 1] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] - 1] & pieceBB[side][Piece::pawn]));
         }
         score[side] += nPawnsSurroundKing * bonusPawnSurroundKing;
-        score[side] -= openFilesPenalty[nOpenFilesKing];
         score[side] -= semiOpenFilesPenalty[nSemiOpenFilesKing];
     }
 

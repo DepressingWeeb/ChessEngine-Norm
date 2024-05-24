@@ -45,12 +45,12 @@ enum Direction {
 };
 class Move {
 private:
-    uint64_t encodedMove;
+    uint32_t encodedMove;
 public:
     Move() {
         encodedMove = 0;
     }
-    Move(uint64_t encoded) {
+    Move(uint32_t encoded) {
         encodedMove = encoded;
     }
     Move(int startPos, int endPos, MoveType moveType, Side sideToMove, Piece movePiece, Piece capturePiece = Piece::any) {
@@ -122,47 +122,41 @@ public:
 
     void setEndPos(int endPos) {
         //encodedMove &= ~(0b111111ULL << 6); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(endPos) << 6);
+        encodedMove |= (static_cast<uint32_t>(endPos) << 6);
     }
 
     void setMovePiece(Piece movePiece) {
         //encodedMove &= ~(0b111ULL << 12); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(movePiece) << 12);
+        encodedMove |= (static_cast<uint32_t>(movePiece) << 12);
     }
 
     void setCapturePiece(Piece capturePiece) {
         //encodedMove &= ~(0b111LL << 15); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(capturePiece) << 15);
+        encodedMove |= (static_cast<uint32_t>(capturePiece) << 15);
     }
 
     void setSideToMove(Side sideToMove) {
         //encodedMove &= ~(0x1ULL << 18); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(sideToMove) << 18);
+        encodedMove |= (static_cast<uint32_t>(sideToMove) << 18);
     }
 
     void setMoveType(MoveType moveType) {
         //encodedMove &= ~(0xFULL << 19); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(moveType) << 19);
+        encodedMove |= (static_cast<uint32_t>(moveType) << 19);
     }
 
     void setCastleRightBefore(bool r1, bool r2) {
         //encodedMove &= ~(0x3ULL << 23); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(r1) << 23) | (static_cast<uint64_t>(r2) << 24);
+        encodedMove |= (static_cast<uint32_t>(r1) << 23) | (static_cast<uint32_t>(r2) << 24);
     }
 
     void setEnpassantPosBefore(int pos) {
         //encodedMove &= ~(0b111111ULL << 25); // Clear the previous value
-        encodedMove |= (static_cast<uint64_t>(pos) << 25);
-    }
-
-    void setMovePriority(int movePriority) {
-        uint64_t scoreConverted = static_cast<uint64_t>(movePriority + MAX_PRIORITY);
-        encodedMove &= ~(0xFFFFFFFFULL << 32); // Clear the previous value
-        encodedMove |= scoreConverted << 32;
+        encodedMove |= (static_cast<uint32_t>(pos) << 25);
     }
 
     uint32_t getFirst32Bit() {
-        return encodedMove & 0xFFFFFFFFULL;
+        return encodedMove;
     }
 
     // Getters
@@ -196,9 +190,6 @@ public:
     int getEnpassantPosBefore() const {
         return static_cast<int>((encodedMove >> 25) & 0b111111);
     }
-    int getMovePriority() const {
-        return static_cast<int>(((encodedMove >> 32) & 0xFFFFFFFFull) - MAX_PRIORITY);
-    }
 };
 
 class MoveVector {
@@ -220,11 +211,6 @@ public:
     void reset() {
         currPos = 0;
     }
-    void sortByPriority() {
-        std::sort(arr,arr+currPos, [](const Move& a, const Move& b) {
-            return a.getMovePriority() > b.getMovePriority();
-            });
-    }
     Move operator [] (int i) const { return arr[i]; }
     Move& operator [] (int i) { return arr[i]; }
 };
@@ -236,9 +222,9 @@ public:
 class SearchStack {
 public:
     int eval;
-    int extensions;
     Move move;
     MoveVector moves;
+    int movePriority[218];
 };
 
 enum class NodeFlag :int {

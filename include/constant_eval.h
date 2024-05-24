@@ -24,7 +24,6 @@ const int pawnDoublePenalty = S(3, 37);
 const int pawnIsolatedPenalty = S(27, 22);
 
 const int bonusPawnSurroundKing = S(9, 9);
-const int openFilesPenalty[4] = { 0,0,0,0 };
 const int semiOpenFilesPenalty[4] = { S(-37, 28), S(-6, 9), S(26, -5), S(85, -29) };
 
 const int bonusPassedPawnByRank[8] = { 0, S(8, -2), S(7, -7), S(-3, 21), S(15, 58), S(44, 149), S(93, 254), S(0, 100) };
