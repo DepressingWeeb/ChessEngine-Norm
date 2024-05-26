@@ -24,6 +24,7 @@ protected:
     std::vector<uint64_t> hashMoveHistory;
     Move killerMoves[64][2];
     int historyTable[2][7][64];
+    Move PV[64][128];
     int mainNodeCnt = 0;
     int qNodeCnt = 0;
     int cnt[100]{ 0 };
@@ -34,6 +35,7 @@ protected:
 public:
     std::string bestMove;
     int currEval;
+    std::vector<std::string> debugLine;
     BitBoard bb;
     ChessEngine();
     ChessEngine(std::string fen);
@@ -192,7 +194,6 @@ void ChessEngine::selectionSort(MoveVector& moves,int* movePriority, int currInd
 }
 
 void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove, int* movePriority) {
-    uint32_t first32Bit = currBestMove.getFirst32Bit();
 
     if (!killerMoves[pliesFromRoot][0].isNullMove()) {
         for (int i = 0; i < moves.size(); i++) {
@@ -202,8 +203,7 @@ void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoo
             MoveType moveType = moves[i].getMoveType();
             int startPos = moves[i].getStartPos();
             int endPos = moves[i].getEndPos();
-            uint32_t move32Bit = moves[i].getFirst32Bit();
-            if (move32Bit == first32Bit) {
+            if (moves[i] == currBestMove) {
                 movePriority[i] = 1000000;
                 continue;
             }
@@ -279,7 +279,7 @@ void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoo
             MoveType moveType = moves[i].getMoveType();
             int startPos = moves[i].getStartPos();
             int endPos = moves[i].getEndPos();
-            if (moves[i].getFirst32Bit() == first32Bit) {
+            if (moves[i] == currBestMove) {
                 movePriority[i] = 1000000;
                 continue;
             }
@@ -439,7 +439,18 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
     Move potentialBestMove = Move();
     TableEntry* entry = ttable->find(zHash);
-    bool isPVNode = false;
+    //bool isPVNode = false;
+    bool isPVNode = pliesFromRoot==0 ||(isPV && ss[pliesFromRoot-1].move == PV[maxDepth-1][pliesFromRoot-1]);
+    if (isPVNode && (pliesFromRoot & 0b111) == 7 && pliesFromRoot < maxDepth * 2) {
+        depth++;
+        //cnt[2]++;
+    }
+    /*
+    if (pliesFromRoot == 1) {
+        std::cout << ss[pliesFromRoot - 1].move.toUci() << " " << PV[maxDepth - 1][pliesFromRoot - 1].toUci()
+            <<" "<< ss[pliesFromRoot - 1].move.getFirst32Bit() << " " << PV[maxDepth - 1][pliesFromRoot - 1].getFirst32Bit()<<std::endl;
+    }
+    */
     bool isFoundInTable = entry != nullptr;
     NodeFlag expectedNode = NodeFlag::ALLNODE;
     int entryDepth = 0;
@@ -449,7 +460,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         entryDepth = entry->getDepth();
         expectedNode = entry->getNodeFlag();
         entryScore = entry->getScore();
-        isPVNode = isPV && expectedNode == NodeFlag::EXACT;
+        //isPVNode = isPV && expectedNode == NodeFlag::EXACT;
         potentialBestMove = entry->getBestMove();
         entryEval = entry->getEval();
         if (bb.isValidMove(potentialBestMove)) {
@@ -475,10 +486,24 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     if (depth >= 4 && !isFoundInTable) {
         depth -= IIDReductionDepth;
     }
-    if (isPVNode && (pliesFromRoot & 0b111) == 7 && pliesFromRoot < maxDepth * 2) {
-        depth++;
+    /*
+    if (debugLine.size() != 0 && pliesFromRoot == debugLine.size()+1) {
+        bool matched = true;
+        for (int i = 0; i < debugLine.size(); i++) {
+            if (ss[i].move.toUci() != debugLine[i]) {
+                matched = false;
+            }
+        }
+        if (matched) {
+            std::cout << "Checking variation ";
+            for (int i = 0; i < pliesFromRoot; i++) {
+                std::cout << ss[i].move.toUci() << " ";
+            }
+            std::cout << "Depth: " << depth << std::endl;
+            std::cout << std::endl;
+        }
     }
-
+    */
     int bestScore = -2000000000;
     int beginAlpha = alpha;
     bool isEndgame = bb.isEndgame();
@@ -508,8 +533,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     }
     if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && !bb.isKingAndPawnEndgame() && abs(staticEval) < 1000000000) {
         Move nullMove = Move();
-        ss[pliesFromRoot].move = nullMove;
         uint64_t newHash = bb.move(nullMove, zHash);
+        ss[pliesFromRoot].move = nullMove;
         int evalNullMove = 0;
         if (!bb.isRepeatedPosition()) {
             evalNullMove = -search(bb, ss, std::clamp(((depth * 100 + (beta - staticEval) / 100) / nullMoveDivision) - 1, 1, depth) - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, false, false);
@@ -523,7 +548,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     }
     NodeFlag flag = NodeFlag::ALLNODE;
     Move currBestMove = potentialBestMove;
-    bool delayedMoveGen = pliesFromRoot > 0;
+    bool delayedMoveGen = pliesFromRoot>3;
 
     //Delay move generation: test the best move from previous iteration first
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
@@ -531,9 +556,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         MoveType moveType = potentialBestMove.getMoveType();
         Piece movePiece = potentialBestMove.getMovePiece();
         int endPos = potentialBestMove.getEndPos();
-
-        ss[pliesFromRoot].move = potentialBestMove;
         uint64_t newHash = bb.move(potentialBestMove, zHash);
+        ss[pliesFromRoot].move = potentialBestMove;
         int score = 0;
 
         if (!bb.isRepeatedPosition()) {
@@ -600,8 +624,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         MoveType moveType = moves[i].getMoveType();
         Piece movePiece = moves[i].getMovePiece();
         int endPos = moves[i].getEndPos();
-        ss[pliesFromRoot].move = moves[i];
         uint64_t newHash = bb.move(moves[i], zHash);
+        ss[pliesFromRoot].move = moves[i];
         int priority = movePriority[i];
         int score = 0;
         if (moveType == MoveType::NORMAL) {
@@ -612,6 +636,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             int lmrDepth = depth;
             if (canLMR) {
                 int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + historyTable[sideToMove][movePiece][endPos] / historyReductionFactor + (!improving && pliesFromRoot >= 2) - isKingInCheck;
+ 
                 lmrDepth = depth - std::clamp(reducedDepth, 1, depth);
             }
 
@@ -626,11 +651,10 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     break;
                 }
 
-                if (quietMoves > LMPLimit) {
+                if (quietMoves > LMPLimit && priority<0) {
                     bb.undoMove(moves[i]);
                     break;
                 }
-
                 if (!isPVNode && !isKingInCheck && moveType == MoveType::NORMAL && lmrDepth < 8) {
                     bb.undoMove(moves[i]);
                     if (!bb.SEE_GE(moves[i], SEENormalMargin * lmrDepth * lmrDepth)) {
@@ -638,16 +662,13 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                     }
                     bb.move(moves[i], zHash);
                 }
-
-
             }
             //Late move reduction, reduce move not high in priority
 
             if (canLMR) {
                 int reducedScore = -search(bb, ss, lmrDepth, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1);
 
-                if (reducedScore > alpha) {
-
+                if (reducedScore > alpha && !(beta==alpha+1 && lmrDepth == depth-1)) {
                     score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1);
                 }
                 else {
@@ -659,7 +680,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                 //PVS
                 if (i >= 1) {
                     score = -search(bb, ss, depth - 1, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1, isPVNode);
-                    if (score > alpha) {
+                    if (score > alpha && beta!=alpha+1) {
                         score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, isPVNode);
                     }
                 }
@@ -728,6 +749,11 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             ttable->set(zHash, TableEntry(zHash, currBestMove, flag, depth, bestScore, evalDepthZero));
         }
     }
+    
+    if (flag == NodeFlag::EXACT) {
+        PV[maxDepth][pliesFromRoot] = currBestMove;
+    }
+    
     return bestScore;
 }
 
@@ -796,6 +822,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
                     break;
                 }
                 power++;
+                //std::cout << std::endl;
                 if (power >= 1) {
                     upperBound = 2000000001;
                     lowerBound = -2000000001;
@@ -811,7 +838,7 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         for (int j = 0; j < 2; j++) {
             for (int k = 0; k < 7; k++) {
                 for (int l = 0; l < 64; l++) {
-                    historyTable[j][k][l] /= 8;
+                    historyTable[j][k][l] /= 2;
                 }
             }
         }
@@ -823,7 +850,13 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         if (maxThreadDepth < i) {
             maxThreadDepth = i;
             finalBestMove = bestMove;
-            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " << bestMove << std::endl;
+            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " ;
+            for (int j = 0; j < 128; j++) {
+                if (PV[i][j].isNullMove())
+                    break;
+                std::cout << PV[i][j].toUci() << " ";
+            }
+            std::cout << std::endl;
         }
 
         if (duration.count() > time)
@@ -851,9 +884,10 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
 class MultithreadChessEngine {
 private:
     std::vector<std::thread>threads;
-    ChessEngine* engines;
+    
     int nThreads;
 public:
+    ChessEngine* engines;
     std::string bestMove;
     bool isWhiteTurn;
     MultithreadChessEngine(int nThreads) {
@@ -1080,7 +1114,11 @@ void uciCommunication()
                     iss >> commands[command::mate];
                 else if (token == "movetime") {
                     iss >> commands[command::move_time];
-
+                }
+                else if (token == "debug") {
+                    while (iss >> token) {
+                        engine.engines[0].debugLine.push_back(token);
+                    }
                 }
                 else if (token == "infinite") {
                     commands[command::infinite];

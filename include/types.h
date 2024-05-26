@@ -63,10 +63,10 @@ public:
         setMoveType(moveType);//4 bit
     }
     const bool operator == (const Move& m) {
-        return (encodedMove & ~(0xffffffff00000000ull)) == (m.encodedMove & ~(0xffffffff00000000ull));
+        return (encodedMove & 0xFFFFF) == (m.encodedMove & 0xFFFFF);
     }
     const bool operator != (const Move& m) {
-        return (encodedMove & ~(0xffffffff00000000ull)) != (m.encodedMove & ~(0xffffffff00000000ull));
+        return (encodedMove & 0xFFFFF) != (m.encodedMove & 0xFFFFF);
     }
     bool isNullMove() {
         return getStartPos() == getEndPos();

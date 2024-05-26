@@ -2362,6 +2362,7 @@ int BitBoard::evaluate(int alpha, int beta) {
     };
     int rankKing[2] = { posToRank(kingPos[0]) , posToRank(kingPos[1]) };
     int fileKing[2] = { posToFile(kingPos[0]) , posToFile(kingPos[1]) };
+    bool halve = false;
     if (totalOcc <= 6 && (pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) == 0) {
         int diffQueens = static_cast<int>(popcount64(pieceBB[Side::White][Piece::queen]) - popcount64(pieceBB[Side::Black][Piece::queen]))
             * pieceValue[Piece::queen];
@@ -2374,15 +2375,7 @@ int BitBoard::evaluate(int alpha, int beta) {
         int diffMaterial = diffQueens + diffRooks + diffKnights + diffBishops;
         if ((pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0) {
             if (abs(diffMaterial) <= 300) {
-                float distBetweenKing = abs(fileKing[0] - fileKing[1]) + abs(rankKing[0] - rankKing[1]);
-                int ans = 0;
-                if (diffMaterial >= 0) {
-                    ans += (4.7f * arrCenterManhattanDistance[kingPos[1]] + 1.6 * (14.0f - distBetweenKing));
-                }
-                else {
-                    ans -= (4.7f * arrCenterManhattanDistance[kingPos[0]] + 1.6 * (14.0f - distBetweenKing));
-                }
-                return ans * who2move * 100;
+                halve = true;
             }
         }
     }
@@ -2463,6 +2456,7 @@ int BitBoard::evaluate(int alpha, int beta) {
                     }
                     if (filePawn == 0 || filePawn == 7)
                         score[side] += bonusOutsidePasser;
+                   
                     weight = 6;
                 }
                 totalWeightedKingDistToOwnPawn[side] += weight * manhattanDist;
@@ -2612,7 +2606,8 @@ int BitBoard::evaluate(int alpha, int beta) {
     int eval = (score[0] - score[1]);
 
     int ans = (((short)eval * (256 - phase) + ((eval + 0x8000) >> 16) * scale * (phase)) / 256);
-
+    if (halve)
+        ans >>= 1;
     //Mop-up eval
     if (pieceBB[0][Piece::pawn] == 0 && pieceBB[1][Piece::pawn] == 0) {
         float distBetweenKing = abs(fileKing[0] - fileKing[1]) + abs(rankKing[0] - rankKing[1]);
@@ -2623,7 +2618,7 @@ int BitBoard::evaluate(int alpha, int beta) {
             ans -= (4.7f * arrCenterManhattanDistance[kingPos[0]] + 1.6 * (14.0f - distBetweenKing));
         }
     }
-
+    
     return ans * who2move * 100;
 
 }
