@@ -419,6 +419,152 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
     }
     return bestScore;
 }
+int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, Move excluded) {
+    bool isKingInCheck = bb.isKingInCheck();
+    //generate legal moves
+    auto& moves = ss[pliesFromRoot].moves;
+    auto& movePriority = ss[pliesFromRoot].movePriority;
+    bb.getLegalMovesAlt(moves);
+    if (moves.size() == 0) {
+        if (isKingInCheck)
+            return -2000000000 + pliesFromRoot;
+        return 0;
+    }
+    moveOrdering(bb, moves, pliesFromRoot, excluded, movePriority);
+    int staticEval = ss[pliesFromRoot].eval;
+    int bestScore = -2e9;
+    bool improving = pliesFromRoot >= 2 && staticEval > ss[pliesFromRoot - 2].eval;
+    ss[pliesFromRoot].eval = staticEval;
+    Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
+    Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
+    bool lmr = depth >= 3;
+    int futilityVal = 0;
+    int i;
+    int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 5 : quietsToCheckTable[depth]) : 999;
+    int quietMoves = 0;
+    bool isRepeated = false;
+    for (i = 0; i < moves.size(); i++) {
+        selectionSort(moves, movePriority, i);
+        if (i == 0)
+            continue;
+        isRepeated = false;
+        MoveType moveType = moves[i].getMoveType();
+        Piece movePiece = moves[i].getMovePiece();
+        int endPos = moves[i].getEndPos();
+        uint64_t newHash = bb.move(moves[i], zHash);
+        ss[pliesFromRoot].move = moves[i];
+        int priority = movePriority[i];
+        int score = 0;
+        if (moveType == MoveType::NORMAL) {
+            quietMoves++;
+        }
+        if (!bb.isRepeatedPosition()) {
+            bool canLMR = (lmr && i > 0 && priority < 15001 && moveType != MoveType::CAPTURE);
+            int lmrDepth = depth;
+            if (canLMR) {
+                int reducedDepth = (log2(i) * log2(depth) / lmrDiv + lmrBase) + historyTable[sideToMove][movePiece][endPos] / historyReductionFactor + (!improving && pliesFromRoot >= 2) - isKingInCheck;
+                lmrDepth = depth - std::clamp(reducedDepth, 1, depth);
+            }
+
+            //pruning at low depth
+            if (!isKingInCheck && pliesFromRoot > 0 && bestScore > -1000000000) {
+                futilityVal = staticEval + (bestScore < staticEval ? 12500 : 7250) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
+                if (lmrDepth <= futilityDepthLimit && futilityVal <= alpha && moveType == MoveType::NORMAL) {
+                    if (bestScore <= futilityVal && abs(bestScore) < 1000000000) {
+                        bestScore = (bestScore + futilityVal) / 2;
+                    }
+                    bb.undoMove(moves[i]);
+                    break;
+                }
+                if (quietMoves > LMPLimit) {
+                    bb.undoMove(moves[i]);
+                    break;
+                }
+                if (!isKingInCheck && moveType == MoveType::NORMAL && lmrDepth < 8) {
+                    bb.undoMove(moves[i]);
+                    if (!bb.SEE_GE(moves[i], SEENormalMargin * lmrDepth * lmrDepth)) {
+                        continue;
+                    }
+                    bb.move(moves[i], zHash);
+                }
+
+
+            }
+            //Late move reduction, reduce move not high in priority
+
+            if (canLMR) {
+                int reducedScore = -search(bb, ss, lmrDepth, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1);
+
+                if (reducedScore > alpha) {
+
+                    score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1);
+                }
+                else {
+                    score = reducedScore;
+                }
+            }
+            else {
+
+                //PVS
+                if (i >= 1) {
+                    score = -search(bb, ss, depth - 1, maxDepth, -alpha - 1, -alpha, newHash, pliesFromRoot + 1, false);
+                    if (score > alpha) {
+                        score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, false);
+                    }
+                }
+                else {
+                    score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, false);
+                }
+            }
+        }
+        else {
+            isRepeated = true;
+        }
+        bb.undoMove(moves[i]);
+        if (pliesFromRoot == 0 && score > bestScore) {
+            bestMove = moves[i].toUci();
+        }
+        if (score >= beta) {
+
+            if (moveType == MoveType::NORMAL) {
+                int bonus = staticEval < alpha ? (depth + 1) * (depth + 1) : depth * depth;
+                int toAdd = (16 * bonus - historyTable[sideToMove][movePiece][endPos] * bonus / 512);
+                historyTable[sideToMove][movePiece][endPos] += toAdd;
+                for (int j = 0; j < i; j++) {
+                    MoveType moveType2 = moves[j].getMoveType();
+                    Piece movePiece2 = moves[j].getMovePiece();
+                    int endPos2 = moves[j].getEndPos();
+                    if (moveType2 == MoveType::NORMAL) {
+                        int toMinus = (16 * bonus + historyTable[sideToMove][movePiece2][endPos2] * bonus / 512);
+                        historyTable[sideToMove][movePiece2][endPos2] -= toMinus;
+                    }
+                }
+            }
+            //If the move is not high in priority and it is not in the killer move yet,save it to the killer move array 
+
+            if (priority < 15001 && !(moves[i] == killerMoves[pliesFromRoot][0])) {
+                if (moves[i] == killerMoves[pliesFromRoot][1]) {
+                    std::swap(killerMoves[pliesFromRoot][0], killerMoves[pliesFromRoot][1]);
+                }
+                else {
+                    killerMoves[pliesFromRoot][1] = killerMoves[pliesFromRoot][0];
+                    killerMoves[pliesFromRoot][0] = moves[i];
+                }
+            }
+            return score;
+        }
+        if (score > bestScore) {
+            bestScore = score;
+        }
+        if (score > alpha) {
+            alpha = score;
+
+        }
+
+    }
+    return bestScore;
+
+}
 
 int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, bool canNullMove) {
     mainNodeCnt++;
@@ -548,7 +694,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     }
     NodeFlag flag = NodeFlag::ALLNODE;
     Move currBestMove = potentialBestMove;
-    bool delayedMoveGen = pliesFromRoot>3;
+    bool delayedMoveGen = pliesFromRoot>=1;
 
     //Delay move generation: test the best move from previous iteration first
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
@@ -556,12 +702,35 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         MoveType moveType = potentialBestMove.getMoveType();
         Piece movePiece = potentialBestMove.getMovePiece();
         int endPos = potentialBestMove.getEndPos();
+        int extension = 0;
+
+        if (depth >= 6 + isPVNode && expectedNode == NodeFlag::CUTNODE && entryDepth >= depth - 3 && abs(staticEval) < 1e9) {
+            int singularBeta = entryScore - depth * 400;
+            int singularScore = singularSearch(bb, ss, (depth - 1) / 2, maxDepth, singularBeta - 1, singularBeta, zHash, pliesFromRoot, isPV, potentialBestMove);
+            if (singularScore < singularBeta) {
+                int doubleMargin = 5000;
+                if (!isPVNode && singularScore < singularBeta - doubleMargin && pliesFromRoot < maxDepth) {
+                    extension = 2;
+                }
+                else {
+                    extension = 1;
+                }
+            }
+            else if (singularBeta >= beta) {
+                return singularBeta;
+            }
+            else if (entryScore >= beta) {
+                extension = -1 - (entryScore >= beta + 6000);
+            }
+
+        }
+
         uint64_t newHash = bb.move(potentialBestMove, zHash);
         ss[pliesFromRoot].move = potentialBestMove;
         int score = 0;
 
         if (!bb.isRepeatedPosition()) {
-            score = -search(bb, ss, depth - 1, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, isPVNode);
+            score = -search(bb, ss, depth - 1 + extension, maxDepth, -beta, -alpha, newHash, pliesFromRoot + 1, isPVNode);
         }
         else
             isRepeated = true;

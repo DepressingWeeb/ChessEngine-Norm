@@ -14,14 +14,17 @@ project ("ChessAI")
 set(SOURCES
     src/main.cpp
     src/ChessAI.cpp
+    src/bitboard.cpp
     include/ChessAI.h
     include/constant_eval.h
+    include/bitboard.h
+    include/utils.h
 
 )
 include(CheckIPOSupported)
 check_ipo_supported(RESULT supported OUTPUT error)
 # Add source to this project's executable.
-add_executable (ChessAI ${SOURCES} "include/ttable.h" "include/types.h" "include/constant_eval.h" "include/constant_search.h" "include/fancy_movegen.h" "include/constant_hash.h")
+add_executable (ChessAI ${SOURCES} "include/ttable.h" "include/types.h" "include/constant_eval.h" "include/constant_search.h" "include/constant_bitboard.h" "include/constant_hash.h")
 if( supported )
     message(STATUS "IPO / LTO enabled")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -42,7 +45,7 @@ if(MSVC)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:12000000")
 elseif(CMAKE_COMPILER_IS_GNUCXX)
     message("-- CMake run for g++")
-    set(CMAKE_CXX_FLAGS "-O3 -ffast-math -march=native")
+    set(CMAKE_CXX_FLAGS "-O3")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,15000000")
     
 
