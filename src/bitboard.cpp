@@ -183,16 +183,16 @@ void BitBoard::parseFEN(std::string fen) {
         switch (v[2][i])
         {
         case 'Q':
-            castingRight[Side::White][0] = true;
-            break;
-        case 'K':
             castingRight[Side::White][1] = true;
             break;
+        case 'K':
+            castingRight[Side::White][0] = true;
+            break;
         case 'q':
-            castingRight[Side::Black][0] = true;
+            castingRight[Side::Black][1] = true;
             break;
         case 'k':
-            castingRight[Side::Black][1] = true;
+            castingRight[Side::Black][0] = true;
             break;
         default:
             castingRight[Side::Black][0] = false;
@@ -2454,6 +2454,12 @@ int BitBoard::evaluate(int alpha, int beta) {
                     if (pieceTable[pos + pawnPushOffset] != Piece::any) {
                         score[side] -= penaltyBlockedPasserByRank[rankPawn];
                     }
+                    if (arrAfterPawn[!side][pos] & pieceBB[side][Piece::rook] && rankPawn >= 4)
+                        score[side]+=bonusRookSupportPasser;
+                    if (arrAfterPawn[side][pos] & pieceBB[!side][Piece::rook] && rankPawn >= 4)
+                        score[side] -= penaltyEnemyRookBlockPasser;
+                    if (arrAfterPawn[side][pos] & pieceBB[!side][Piece::any] && rankPawn >= 5)
+                        score[side] -= penaltyHasBlockade;
                     if (filePawn == 0 || filePawn == 7)
                         score[side] += bonusOutsidePasser;
                    
@@ -2482,9 +2488,6 @@ int BitBoard::evaluate(int alpha, int beta) {
                 totalAtkUnits += nAtksOnInnerRing * 2 + nAtksOnOuterRing;
                 if (sideIsSTM && (attacks & allPieces[opSide])) {
                     score[side] += bonusThreatOnHigherValuePiece[1];
-                }
-                if (popcount64(attacks) == 0) {
-                    score[side] -= penaltyNoMobility[Piece::pawn];
                 }
             }
             else if (piece == Piece::knight) {

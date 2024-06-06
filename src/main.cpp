@@ -704,12 +704,11 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         int endPos = potentialBestMove.getEndPos();
         int extension = 0;
 
-        if (depth >= 6 + isPVNode && expectedNode == NodeFlag::CUTNODE && entryDepth >= depth - 3 && abs(staticEval) < 1e9) {
-            int singularBeta = entryScore - depth * 400;
+        if (depth >= SEDepth + isPVNode && expectedNode == NodeFlag::CUTNODE && entryDepth >= depth - 3 && abs(staticEval) < 1e9) {
+            int singularBeta = entryScore - depth * SEMargin;
             int singularScore = singularSearch(bb, ss, (depth - 1) / 2, maxDepth, singularBeta - 1, singularBeta, zHash, pliesFromRoot, isPV, potentialBestMove);
             if (singularScore < singularBeta) {
-                int doubleMargin = 5000;
-                if (!isPVNode && singularScore < singularBeta - doubleMargin && pliesFromRoot < maxDepth) {
+                if (!isPVNode && singularScore < singularBeta - SEDoubleMargin && pliesFromRoot < maxDepth) {
                     extension = 2;
                 }
                 else {
@@ -1020,11 +1019,13 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
             maxThreadDepth = i;
             finalBestMove = bestMove;
             std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " ;
+            /*
             for (int j = 0; j < 128; j++) {
                 if (PV[i][j].isNullMove())
                     break;
                 std::cout << PV[i][j].toUci() << " ";
             }
+            */
             std::cout << std::endl;
         }
 
@@ -1220,6 +1221,9 @@ void uciCommunication()
             std::cout << "option name LMP2 type spin default 7 min 3 max 11" << std::endl;
             std::cout << "option name LMP3 type spin default 14 min 7 max 21" << std::endl;
             std::cout << "option name LMP4 type spin default 29 min 15 max 40" << std::endl;
+            std::cout << "option name SEMargin type spin default 400 min 100 max 1000" << std::endl;
+            std::cout << "option name SEDoubleMargin type spin default 5000 min 1000 max 15000" << std::endl;
+            std::cout << "option name SEDepth type spin default 6 min 4 max 7" << std::endl;
             std::cout << "uciok" << std::endl;
         }
         else if (token == "isready")
@@ -1344,6 +1348,15 @@ void uciCommunication()
             else if (optionName == "lmrBase") {
                 lmrBase = std::stoi(value);
                 lmrBase /= 100.f;
+            }
+            else if (optionName == "SEMargin") {
+                SEMargin = std::stoi(value);
+            }
+            else if (optionName == "SEDoubleMargin") {
+                SEDoubleMargin = std::stoi(value);
+            }
+            else if (optionName == "SEDepth") {
+                SEDepth = std::stoi(value);
             }
             else if (optionName == "historyReductionFactor") {
                 historyReductionFactor = std::stoi(value);

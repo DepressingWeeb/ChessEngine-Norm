@@ -14,4 +14,7 @@ const int futilityMargin = 12500;
 const int futilityDepthLimit = 6;
 const int SEEMargin = -72;
 const int SEENormalMargin = -17;
+int SEMargin = 400;
+int SEDoubleMargin = 5000;
+int SEDepth = 6;
 int quietsToCheckTable[5] = { 0, 6, 4, 13, 23};

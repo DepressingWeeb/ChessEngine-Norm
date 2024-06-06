@@ -19,7 +19,7 @@ const int pieceValue[7] = {
 const int tempo = S(20, 11);
 const int phases[7] = { 0 , 0, 1, 1, 2, 4, 0 };
 const int TOTAL_PHASE = 24;
-
+const int penaltyNoMobility[] = { 0, S(10, 10), S(30, 69), S(10, 25), S(7, 14), S(17, -18), S(14, 12) };
 const int pawnDoublePenalty = S(3, 37);
 const int pawnIsolatedPenalty = S(27, 22);
 
@@ -27,12 +27,12 @@ const int bonusPawnSurroundKing = S(9, 9);
 const int semiOpenFilesPenalty[4] = { S(-37, 28), S(-6, 9), S(26, -5), S(85, -29) };
 
 const int bonusPassedPawnByRank[8] = { 0, S(8, -2), S(7, -7), S(-3, 21), S(15, 58), S(44, 149), S(93, 254), S(0, 100) };
-const int penaltyBlockedPasserByRank[8] = { 0, S(14, 5), S(2, 2), S(-1, 9), S(3, 17), S(-4, 64), S(-12, 109), 0 };
+const int penaltyBlockedPasserByRank[8] = { 0, S(14, 5), S(2, 2), S(-1, 9), S(3, 17), S(-4, 48), S(-12, 89), 0 };
 const int bonusConnectedPassedPawn = S(21, 30);
 const int bonusThreatOnHigherValuePiece[2] = {S(40,16),S(120,68)};
-const int penaltyNoMobility[] = { 0, S(10, 10), S(30, 69), S(10, 25), S(7, 14), S(17, -18), S(14, 12) };
+
 const int materialValue[7] = { 0, S(100, 137), S(381, 328), S(385, 381), S(527, 690), S(1142, 1213), 0 };
-const int mobilityValue[7] = { 0, 0, S(8, 13), S(7, 8), S(4, 5), S(1, 9), S(-7, 13) };
+const int mobilityValue[7] = { 0, 0, S(8, 13), S(7, 8), S(4, 5), S(1, 9), S(-7, 13)};
 
 //Original table from https://www.chessprogramming.org/King_Safety
 const int SafetyTable[100] = {
@@ -52,6 +52,13 @@ const int kingPawnTropismFactor = S(-4, 5);
 const int bonusOutsidePasser = S(0,25);
 const int bonusRookOnSemiOpenFile = S(15, 25);
 const int bonusRookOnOpenFile = S(22, 35);
+const int bonusRookSupportPasser = S(22, 35);
+const int penaltyEnemyRookBlockPasser = S(15, 22);
+const int penaltyHasBlockade = S(20, 30);
+
+
+
+
 
 //The table I stolen from PeSTO https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function  
 const int pawnTable[64] = {
