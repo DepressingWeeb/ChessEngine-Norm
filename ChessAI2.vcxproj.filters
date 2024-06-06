@@ -39,9 +39,6 @@
     <ClInclude Include="bitboard.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="order.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp">

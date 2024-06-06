@@ -27,7 +27,6 @@
     <ClInclude Include="include\ttable.h" />
     <ClInclude Include="include\types.h" />
     <ClInclude Include="include\utils.h" />
-    <ClInclude Include="order.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\bitboard.cpp" />
