@@ -227,7 +227,10 @@ public:
     bool isRepeatedPosition() {
         return repetitionTable.isRepetition();
     }
-    bool isKingAndPawnEndgame() {
-        return !((pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]) & ~(pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn] | pieceBB[Side::White][Piece::king] | pieceBB[Side::Black][Piece::king]));
+    bool isNullMoveEnable() {
+        uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
+        int nPieces = popcount64(occupied);
+        //number of piece >6 and not king and pawn endgame
+        return (nPieces > 6) && (occupied & ~(pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn] | pieceBB[Side::White][Piece::king] | pieceBB[Side::Black][Piece::king]));
     }
 };

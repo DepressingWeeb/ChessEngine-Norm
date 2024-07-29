@@ -5,7 +5,7 @@
 #include <nmmintrin.h>
 const uint64_t TABLE_SIZE = 0x100000;
 const uint64_t MASK_HASH = TABLE_SIZE-1;
-const int MATE_VALUE = 2e9;
+const int MATE_VALUE = 1e9;
 const int BUCKET_SIZE = 4;
 class TableEntry {
 public:
@@ -15,7 +15,13 @@ public:
         data1 = 0;
         data2 = 0;
     }
-    TableEntry(uint64_t zHash,Move best, NodeFlag flag, int depth, int score,int staticEval) {
+    TableEntry(uint64_t zHash,Move best, NodeFlag flag, int depth, int score,int staticEval,int pliesFromRoot) {
+        if (score > 900000000) {
+            score += pliesFromRoot;
+        }
+        else if (score < -900000000) {
+            score -= pliesFromRoot;
+        }
         setKey(zHash);
         setBestMove(best);
         setNodeFlag(flag);
@@ -48,7 +54,7 @@ public:
         //assert(getScore() == score);
     }
     void setScore(int score) {
-        uint64_t scoreConverted = static_cast<uint64_t>(score) + (uint64_t)MATE_VALUE;
+        uint64_t scoreConverted = static_cast<uint64_t>(score + MATE_VALUE) ;
         data2 &= ~(0xFFFFFFFFull << 18); // Clear the previous value
         data2 |= scoreConverted << 18;
         //assert(getScore() == score);
@@ -63,7 +69,7 @@ public:
     
 
     int getScore() const {
-        return static_cast<int>(((data2 >> 18ull) & 0xFFFFFFFFull)-MATE_VALUE);
+        return static_cast<int>(((data2 >> 18) & 0xFFFFFFFFull)- MATE_VALUE);
     }
     int getEval() const{
         return static_cast<int>(((data2 >> 50) & 0b1111111111111ull)-4000)<<6;
@@ -118,6 +124,12 @@ public:
             arrEntry[key][i] = arrEntry[key][i - 1];
         }
         arrEntry[key][0] = t;
+    }
+    static void adjustScore(int& score,int ply) {
+        if (score > 900000000)
+            score-=ply;
+        else if (score < -900000000)
+            score+=ply;
     }
 };
 

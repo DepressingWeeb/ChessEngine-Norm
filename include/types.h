@@ -63,10 +63,10 @@ public:
         setMoveType(moveType);//4 bit
     }
     const bool operator == (const Move& m) {
-        return (encodedMove & 0xFFFFF) == (m.encodedMove & 0xFFFFF);
+        return (encodedMove & 0b11111111111111111111111) == (m.encodedMove & 0b11111111111111111111111);
     }
     const bool operator != (const Move& m) {
-        return (encodedMove & 0xFFFFF) != (m.encodedMove & 0xFFFFF);
+        return (encodedMove & 0b11111111111111111111111) != (m.encodedMove & 0b11111111111111111111111);
     }
     bool isNullMove() {
         return getStartPos() == getEndPos();
@@ -116,42 +116,42 @@ public:
     }
     // Setters
     void setStartPos(int startPos) {
-        //encodedMove &= ~(0b111111ULL); // Clear the previous value
+        encodedMove &= ~(0b111111ULL); // Clear the previous value
         encodedMove |= (startPos);
     }
 
     void setEndPos(int endPos) {
-        //encodedMove &= ~(0b111111ULL << 6); // Clear the previous value
+        encodedMove &= ~(0b111111ULL << 6); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(endPos) << 6);
     }
 
     void setMovePiece(Piece movePiece) {
-        //encodedMove &= ~(0b111ULL << 12); // Clear the previous value
+        encodedMove &= ~(0b111ULL << 12); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(movePiece) << 12);
     }
 
     void setCapturePiece(Piece capturePiece) {
-        //encodedMove &= ~(0b111LL << 15); // Clear the previous value
+        encodedMove &= ~(0b111LL << 15); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(capturePiece) << 15);
     }
 
     void setSideToMove(Side sideToMove) {
-        //encodedMove &= ~(0x1ULL << 18); // Clear the previous value
+        encodedMove &= ~(0x1ULL << 18); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(sideToMove) << 18);
     }
 
     void setMoveType(MoveType moveType) {
-        //encodedMove &= ~(0xFULL << 19); // Clear the previous value
+        encodedMove &= ~(0xFULL << 19); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(moveType) << 19);
     }
 
     void setCastleRightBefore(bool r1, bool r2) {
-        //encodedMove &= ~(0x3ULL << 23); // Clear the previous value
+        encodedMove &= ~(0x3ULL << 23); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(r1) << 23) | (static_cast<uint32_t>(r2) << 24);
     }
 
     void setEnpassantPosBefore(int pos) {
-        //encodedMove &= ~(0b111111ULL << 25); // Clear the previous value
+        encodedMove &= ~(0b111111ULL << 25); // Clear the previous value
         encodedMove |= (static_cast<uint32_t>(pos) << 25);
     }
 

@@ -34,6 +34,14 @@ const int bonusThreatOnHigherValuePiece[2] = {S(40,16),S(120,68)};
 const int materialValue[7] = { 0, S(100, 137), S(381, 328), S(385, 381), S(527, 690), S(1142, 1213), 0 };
 const int mobilityValue[7] = { 0, 0, S(8, 13), S(7, 8), S(4, 5), S(1, 9), S(-7, 13)};
 
+const int bishopPairBonus = S(44, 75);
+const int kingPawnTropismFactor = S(-4, 5);
+const int bonusOutsidePasser = S(0, 25);
+const int bonusRookOnSemiOpenFile = S(15, 25);
+const int bonusRookOnOpenFile = S(22, 35);
+const int bonusRookSupportPasser = S(22, 35);
+const int penaltyEnemyRookBlockPasser = S(15, 22);
+const int penaltyHasBlockade = S(20, 30);
 //Original table from https://www.chessprogramming.org/King_Safety
 const int SafetyTable[100] = {
     0,  0,   1,   2,   3,   5,   7,   9,  12,  15,
@@ -47,14 +55,7 @@ const int SafetyTable[100] = {
  500, 500, 500, 500, 500, 500, 500, 500, 500, 500,
  500, 500, 500, 500, 500, 500, 500, 500, 500, 500
 };
-const int bishopPairBonus = S(44, 75);
-const int kingPawnTropismFactor = S(-4, 5);
-const int bonusOutsidePasser = S(0,25);
-const int bonusRookOnSemiOpenFile = S(15, 25);
-const int bonusRookOnOpenFile = S(22, 35);
-const int bonusRookSupportPasser = S(22, 35);
-const int penaltyEnemyRookBlockPasser = S(15, 22);
-const int penaltyHasBlockade = S(20, 30);
+
 
 
 

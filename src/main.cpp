@@ -47,7 +47,7 @@ public:
     void parseMoves(std::vector<std::string> moves);
     int qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf, int pliesFromRoot);
     int search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV = false, bool canNullMove = true);
-    int iterativeDeepening(int depth, int timeLeft = -1, int moveTime = -1);
+    int iterativeDeepening(int depth, int timeLeft = -1, int moveTime = -1,int movesToGo=-1);
     int singularSearch(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, Move excluded);
     void moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoot, Move& currBestMove,int* movePriority);
     std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1);
@@ -331,7 +331,7 @@ void ChessEngine::moveOrdering(BitBoard& bb, MoveVector& moves, int pliesFromRoo
 }
 int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int beta, int prevEndPos, int pliesFromLeaf, int pliesFromRoot) {
     //qNodeCnt++;
-    int bestScore = -2000000000;
+    int bestScore = -1000000000;
     bool isKingInCheck = bb.isKingInCheck();
     int standPat = !isKingInCheck ? bb.evaluate(alpha, beta) : bestScore;
 
@@ -344,7 +344,7 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
     int futilityBase = standPat + futilityMarginQSearch;
     if (pliesFromLeaf > maxPlyQSearch) {
         if (isKingInCheck && bb.getLegalMoves().size() == 0) {
-            return -2000000000;
+            return -1000000000+pliesFromRoot;
         }
         return bestScore;
     }
@@ -358,7 +358,7 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
     }
     if (moves.size() == 0) {
         if (isKingInCheck) {
-            return -2000000000;
+            return -1000000000+pliesFromRoot;
         }
         return bestScore;
 
@@ -376,7 +376,7 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
             continue;
         }
         bool isPawnEndgame = !((bb.pieceBB[Side::White][Piece::any] | bb.pieceBB[Side::Black][Piece::any]) ^ (bb.pieceBB[Side::White][Piece::pawn] | bb.pieceBB[Side::Black][Piece::pawn] | bb.pieceBB[Side::White][Piece::king] | bb.pieceBB[Side::Black][Piece::king]));
-        if (bestScore > -1000000000 && !isPawnEndgame && !isKingInCheck && (endPos != prevEndPos || prevEndPos == -1) && type != MoveType::PROMOTION_QUEEN && type != MoveType::PROMOTION_QUEEN_AND_CAPTURE) {
+        if (bestScore > -900000000 && !isPawnEndgame && !isKingInCheck && (endPos != prevEndPos || prevEndPos == -1) && type != MoveType::PROMOTION_QUEEN && type != MoveType::PROMOTION_QUEEN_AND_CAPTURE) {
             if (i > 2)
                 continue;
             if (pieceValue[moves[i].getCapturePiece()] * 100 + 20000 + bestScore < alpha) {
@@ -418,12 +418,12 @@ int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss, int depth, 
     bb.getLegalMovesAlt(moves);
     if (moves.size() == 0) {
         if (isKingInCheck)
-            return -2000000000 + pliesFromRoot;
+            return -1000000000 + pliesFromRoot;
         return 0;
     }
     moveOrdering(bb, moves, pliesFromRoot, excluded, movePriority);
     int staticEval = ss[pliesFromRoot].eval;
-    int bestScore = -2e9;
+    int bestScore = -1e9;
     bool improving = pliesFromRoot >= 2 && staticEval > ss[pliesFromRoot - 2].eval;
     ss[pliesFromRoot].eval = staticEval;
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
@@ -458,10 +458,10 @@ int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss, int depth, 
             }
 
             //pruning at low depth
-            if (!isKingInCheck && pliesFromRoot > 0 && bestScore > -1000000000) {
+            if (!isKingInCheck && pliesFromRoot > 0 && bestScore > -900000000) {
                 futilityVal = staticEval + (bestScore < staticEval ? 12500 : 7250) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
                 if (lmrDepth <= futilityDepthLimit && futilityVal <= alpha && moveType == MoveType::NORMAL) {
-                    if (bestScore <= futilityVal && abs(bestScore) < 1000000000) {
+                    if (bestScore <= futilityVal && abs(bestScore) < 900000000) {
                         bestScore = (bestScore + futilityVal) / 2;
                     }
                     bb.undoMove(moves[i]);
@@ -559,11 +559,11 @@ int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss, int depth, 
 
 int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, bool canNullMove) {
     mainNodeCnt++;
-    if ((mainNodeCnt & 1023) == 1023) {
+    if ((mainNodeCnt & 0b1111111111) == 0b1111111111) {
         auto endTime = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - searchStartTime);
         if (duration.count() > timeLimitInMs) {
-            throw 404;
+            throw 403;
         }
     }
     bool isKingInCheck = bb.isKingInCheck();
@@ -576,19 +576,22 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
     Move potentialBestMove = Move();
     TableEntry* entry = ttable->find(zHash);
+   
     bool isPVNode = pliesFromRoot==0 ||(isPV && ss[pliesFromRoot-1].move == PV[maxDepth-1][pliesFromRoot-1]);
     if (isPVNode && (pliesFromRoot & 0b111) == 7 && pliesFromRoot < maxDepth * 2) {
         depth++;
     }
     bool isFoundInTable = entry != nullptr;
+
     NodeFlag expectedNode = NodeFlag::ALLNODE;
     int entryDepth = 0;
-    int entryScore = -2e9;
+    int entryScore = -1e9;
     int entryEval = 0;
     if (isFoundInTable) {
         entryDepth = entry->getDepth();
         expectedNode = entry->getNodeFlag();
         entryScore = entry->getScore();
+        ttable->adjustScore(entryScore,pliesFromRoot);
         potentialBestMove = entry->getBestMove();
         entryEval = entry->getEval();
         if (bb.isValidMove(potentialBestMove)) {
@@ -614,7 +617,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     if (depth >= 4 && !isFoundInTable) {
         depth -= IIDReductionDepth;
     }
-    int bestScore = -2000000000;
+    int bestScore = -1000000000;
     int beginAlpha = alpha;
     bool isEndgame = bb.isEndgame();
     int evalDepthZero = isFoundInTable ? entryEval : bb.evaluate(alpha,beta);
@@ -623,13 +626,15 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     int staticEval = isFoundInTable ? entryScore : evalDepthZero;
     bool isRepeated = false;
     //reverse futility pruning
-    if (!isPVNode && !isKingInCheck && staticEval >= beta && depth <= rfpDepthLimit && canNullMove && pliesFromRoot > 0) {
+    if (!isPVNode && !isKingInCheck && staticEval >= beta && depth <= rfpDepthLimit && canNullMove && pliesFromRoot > 0 && beta>-9e8) {
         int rfpScore = staticEval - rfpMargin * (depth);
         if (rfpScore >= beta) {
-            return beta > -1000000000 ? (staticEval + beta) / 2 : staticEval;
+            return beta > -900000000 ? (staticEval + beta) / 2 : staticEval;
         }
     }
-    if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && !bb.isKingAndPawnEndgame() && abs(staticEval) < 1000000000) {
+    
+    
+    if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && bb.isNullMoveEnable() && beta>-9e8) {
         Move nullMove = Move();
         uint64_t newHash = bb.move(nullMove, zHash);
         ss[pliesFromRoot].move = nullMove;
@@ -640,14 +645,13 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
 
         bb.undoMove(nullMove);
         if (evalNullMove >= beta) {
-            return evalNullMove;
+            return abs(evalNullMove)>9e8?beta:evalNullMove;
         }
-        bestScore = std::max(bestScore, evalNullMove);
     }
+    
     NodeFlag flag = NodeFlag::ALLNODE;
     Move currBestMove = potentialBestMove;
-    bool delayedMoveGen = pliesFromRoot>=1;
-
+    bool delayedMoveGen =pliesFromRoot>=1;
     //Delay move generation: test the best move from previous iteration first
     Side sideToMove = bb.isWhiteTurn ? Side::White : Side::Black;
     if (!potentialBestMove.isNullMove() && delayedMoveGen && bb.isValidMove(potentialBestMove)) {
@@ -656,7 +660,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         int endPos = potentialBestMove.getEndPos();
         int extension = 0;
 
-        if (depth >= SEDepth + isPVNode && expectedNode == NodeFlag::CUTNODE && entryDepth >= depth - 3 && abs(staticEval) < 1e9) {
+        if (depth >= SEDepth + isPVNode && expectedNode == NodeFlag::CUTNODE && entryDepth >= depth - 3 && abs(staticEval) < 9e8) {
             int singularBeta = entryScore - depth * SEMargin;
             int singularScore = singularSearch(bb, ss, (depth - 1) / 2, maxDepth, singularBeta - 1, singularBeta, zHash, pliesFromRoot, isPV, potentialBestMove);
             if (singularScore < singularBeta) {
@@ -688,7 +692,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         bb.undoMove(potentialBestMove);
         if (score >= beta) {
             if (!isRepeated)
-                ttable->set(zHash, TableEntry(zHash, potentialBestMove, NodeFlag::CUTNODE, depth, score, evalDepthZero));
+                ttable->set(zHash, TableEntry(zHash, potentialBestMove, NodeFlag::CUTNODE, depth, score, evalDepthZero,pliesFromRoot));
             if (moveType == MoveType::NORMAL || moveType == MoveType::CASTLE_KINGSIDE || moveType == MoveType::CASTLE_QUEENSIDE) {
                 int depthBonus = depth + (staticEval < alpha);
                 int bonus = depthBonus * depthBonus;
@@ -714,6 +718,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             flag = NodeFlag::EXACT;
         }
 
+
     }
 
 
@@ -724,7 +729,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     bb.getLegalMovesAlt(moves);
     if (moves.size() == 0) {
         if (isKingInCheck)
-            return -2000000000 + pliesFromRoot;
+            return -1000000000 + pliesFromRoot;
         return 0;
     }
     
@@ -761,10 +766,10 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             }
 
             //pruning at low depth
-            if (!isKingInCheck && !isPVNode && pliesFromRoot > 0 && bestScore > -1000000000) {
+            if (!isKingInCheck && !isPVNode && pliesFromRoot > 0 && abs(bestScore) < 900000000) {
                 futilityVal = staticEval + (bestScore < staticEval ? 12500 : 7250) + futilityMargin * lmrDepth + (improving ? 8000 : 0);
                 if (lmrDepth <= futilityDepthLimit && futilityVal <= alpha && moveType == MoveType::NORMAL) {
-                    if (bestScore <= futilityVal && abs(bestScore) < 1000000000) {
+                    if (bestScore <= futilityVal && abs(bestScore) < 900000000) {
                         bestScore = (bestScore + futilityVal) / 2;
                     }
                     bb.undoMove(moves[i]);
@@ -811,6 +816,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         }
         else {
             isRepeated = true;
+
         }
         bb.undoMove(moves[i]);
         if (pliesFromRoot == 0 && score > alpha) {
@@ -835,7 +841,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
                 }
             }
             if (!isRepeated)
-                ttable->set(zHash, TableEntry(zHash, moves[i], NodeFlag::CUTNODE, depth, score, evalDepthZero));
+                ttable->set(zHash, TableEntry(zHash, moves[i], NodeFlag::CUTNODE, depth, score, evalDepthZero,pliesFromRoot));
             //If the move is not high in priority and it is not in the killer move yet,save it to the killer move array 
 
             if (priority < 15001 && !(moves[i] == killerMoves[pliesFromRoot][0])) {
@@ -850,6 +856,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             return score;
         }
         if (score > bestScore) {
+
             bestScore = score;
             currBestMove = moves[i];
         }
@@ -863,21 +870,19 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     //save to TTable
     if ((!isFoundInTable || entryDepth <= depth)) {
         if (flag == NodeFlag::ALLNODE) {
-            ttable->set(zHash, TableEntry(zHash, potentialBestMove, flag, depth, bestScore, evalDepthZero));
+            ttable->set(zHash, TableEntry(zHash, potentialBestMove, flag, depth, bestScore, evalDepthZero,pliesFromRoot));
         }
         else if (flag == NodeFlag::EXACT) {
-            ttable->set(zHash, TableEntry(zHash, currBestMove, flag, depth, bestScore, evalDepthZero));
+            ttable->set(zHash, TableEntry(zHash, currBestMove, flag, depth, bestScore, evalDepthZero,pliesFromRoot));
         }
     }
-    
     if (flag == NodeFlag::EXACT) {
         PV[maxDepth][pliesFromRoot] = currBestMove;
     }
-    
     return bestScore;
 }
 
-int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) {
+int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime,int movesToGo) {
     //time management
     int time;
     if (timeLeft == -1) {
@@ -888,15 +893,23 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         }
     }
     else {
-        int nMoves = std::min(nMovesOutOfBook, 10);
-        double factor = 2 - static_cast<double>(nMoves) / 10.0;
-        double target = timeLeft / (popcount64(bb.pieceBB[Side::Black][Piece::any] | bb.pieceBB[Side::White][Piece::any]) * 2 + 10);
-        time = factor * target;
-
+        int baseTime = 0.025 * static_cast<double>(timeLeft);
+        int nPieces = popcount64(bb.pieceBB[Side::Black][Piece::any] | bb.pieceBB[Side::White][Piece::any]);
+        int bonusMiddleGame = 0.002 * (static_cast<float>(nPieces) / 5.0) * static_cast<double>(timeLeft);
+        int bonusEvalDrawish = currEval!=0?0.0025 * (6.0-static_cast<float>(abs(currEval)) / 5000) * static_cast<double>(timeLeft):0;
+        int movesToGoBonus = 0;
+        if (movesToGo >= 10 && movesToGo < 15)
+            movesToGoBonus = baseTime;
+        if (movesToGo >= 5 && movesToGo < 10)
+            movesToGoBonus = baseTime * 3;
+        if (movesToGo >= 0 && movesToGo < 5)
+            movesToGoBonus = baseTime * 7;
+        bonusEvalDrawish = std::max(bonusEvalDrawish, 0);
+        time = baseTime + bonusMiddleGame + bonusEvalDrawish + (movesToGo<15?movesToGoBonus:0);
     }
-    timeLimitInMs = time;
+    timeLimitInMs =time;
     int currEval = 0;
-    int prevEval = 1000000000;
+    int prevEval = 1000000002;
 
     uint64_t zHash = bb.getCurrentPositionHash();
     ttable->currRootAge = bb.moveNum;
@@ -907,25 +920,22 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
     for (int i = startDepth; i <= 63; i++) {
 
         //Aspiration window
-        if (prevEval != 1000000000 && isEnableAspiration) {
+        if (prevEval != 1000000002 && isEnableAspiration) {
             int beginWindow = 4000;
             int upperWindow = beginWindow;
             int lowerWindow = beginWindow;
             int power = 1;
-
+            int lowerBound = prevEval - lowerWindow;
+            int upperBound = prevEval + upperWindow;
             while (true) {
-                int lowerBound = prevEval - lowerWindow;
-                int upperBound = prevEval + upperWindow;
                 try
                 {
-                    currEval = search(bb, ss, i, i, prevEval - lowerWindow, prevEval + upperWindow, zHash, 0, true);
+                    currEval = search(bb, ss, i, i, lowerBound, upperBound, zHash, 0, true);
                 }
-                catch (int x)
+                catch (...)
                 {
-                    if (x == 404) {
                         //bestMove = lastBestMove;
                         break;
-                    }
                 }
                 prevEval = currEval;
 
@@ -943,16 +953,18 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
                 }
                 power++;
                 //std::cout << std::endl;
-                if (power >= 1) {
-                    upperBound = 2000000001;
-                    lowerBound = -2000000001;
+                lowerBound = prevEval - lowerWindow;
+                upperBound = prevEval + upperWindow;
+                if (power >= 4) {
+                    upperBound = 1000000001;
+                    lowerBound = -1000000001;
                 }
 
             }
         }
         //if this is the first iteration,do a full window search
         else {
-            currEval = search(bb, ss, i, i, -2000000001, 2000000001, zHash, 0, true);
+            currEval = search(bb, ss, i, i, -1000000001, 1000000001, zHash, 0, true);
             lastBestMove = bestMove;
         }
         for (int j = 0; j < 2; j++) {
@@ -970,7 +982,18 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
         if (maxThreadDepth < i) {
             maxThreadDepth = i;
             finalBestMove = bestMove;
-            std::cout << "info score cp " << currEval / 100 << " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv " ;
+            //mate eval info 
+            std::string infoEval="";
+            if (currEval > 1e8) {
+                infoEval = "mate "+std::to_string((100 - currEval % 100) / 2);
+            }
+            else if (currEval < -1e8) {
+                infoEval = "mate "+ std::to_string((-100-currEval % 100) / 2);
+            }
+            else {
+                infoEval = "cp "+std::to_string(currEval / 100);
+            }
+            std::cout << "info score " << infoEval<< " depth " << i << " time " << duration.count() << " nps " << (int)nps << " pv ";
             for (int j = 0; j < 128; j++) {
                 if (PV[i][j].isNullMove())
                     break;
@@ -981,6 +1004,10 @@ int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime) 
 
         if (duration.count() > time)
             break;
+        //bonus time for variation,only when depth > 5 and not in "go movetime" command
+        else if(i>=5 && moveTime==-1 && PV[i][0] != PV[i - 1][0]) {
+           timeLimitInMs +=(0.006) * static_cast<double>(timeLeft);
+        }
         prevEval = currEval;
 
     }
@@ -1024,14 +1051,14 @@ public:
         isWhiteTurn = engines[0].bb.isWhiteTurn;
     }
 
-    std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1) {
+    std::string findBestMove(int depth, int timeLeft = -1, int moveTime = -1,int movesToGo =-1) {
         for (int i = 0; i < nThreads; i++) {
-            threads[i] = std::thread(&ChessEngine::iterativeDeepening, engines[i], i < nThreads / 2 ? 1 : 2, timeLeft, moveTime);
+            threads[i] = std::thread(&ChessEngine::iterativeDeepening, engines[i], i < nThreads / 2 ? 1 : 2, timeLeft, moveTime,movesToGo);
         }
         for (int i = 0; i < nThreads; i++) {
             threads[i].join();
         }
-        int currEval = -2e9;
+        int currEval = -1e9;
         maxThreadDepth = 0;
         bestMove = finalBestMove;
         return bestMove;
@@ -1063,7 +1090,6 @@ void testMoveGen() {
     BitBoard bb = BitBoard();
     auto startTime = std::chrono::steady_clock::now();
     runTest(bb, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 6, 119060324);
-    std::cout << bb.cntNode << std::endl;
     runTest(bb, "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -", 5, 193690690);
     runTest(bb, "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - -", 7, 178633661);
     runTest(bb, "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 5, 15833292);
@@ -1241,15 +1267,20 @@ void uciCommunication()
                 else if (token == "infinite") {
                     commands[command::infinite];
                 }
+            int movesToGo = -1;
+            if (commands.find(command::moves_to_go) != commands.end()) {
+                movesToGo = std::stoi(commands[command::moves_to_go]);
+                
+            }
             if (commands.find(command::move_time) != commands.end()) {
-                engine.findBestMove(1, -1, std::stoi(commands[command::move_time]));
+                engine.findBestMove(1, -1, std::stoi(commands[command::move_time]),movesToGo);
             }
             else {
                 if (engine.isWhiteTurn) {
-                    engine.findBestMove(1, std::stoi(commands[command::white_time]));
+                    engine.findBestMove(1, std::stoi(commands[command::white_time]),-1,movesToGo);
                 }
                 else {
-                    engine.findBestMove(1, std::stoi(commands[command::black_time]));
+                    engine.findBestMove(1, std::stoi(commands[command::black_time]),-1,movesToGo);
                 }
             }
             std::cout << "bestmove " << engine.bestMove << std::endl;
