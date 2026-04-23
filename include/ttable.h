@@ -125,11 +125,30 @@ public:
         }
         arrEntry[key][0] = t;
     }
+    int hashfull() const {
+        // Sample first 1000 indices — standard UCI permille convention
+        constexpr int SAMPLE_SIZE = 1000;
+        int used = 0;
+
+        for (int i = 0; i < SAMPLE_SIZE; i++) {
+            for (int j = 0; j < BUCKET_SIZE; j++) {
+                if (arrEntry[i][j].getHash() != 0) {
+                    used++;
+                }
+            }
+        }
+        return used/BUCKET_SIZE; // out of 1000 = permille
+    }
     static void adjustScore(int& score,int ply) {
         if (score > 900000000)
             score-=ply;
         else if (score < -900000000)
             score+=ply;
+    }
+    void clear() {
+        memset(arrEntry, 0, sizeof(arrEntry)); // Efficiently sets all memory to 0
+        nCollisions = 0;
+        currRootAge = 0;
     }
 };
 

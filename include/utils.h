@@ -51,6 +51,16 @@ inline int BitScanForward64(uint64_t x) {
     return index64[((x ^ (x - 1)) * 0x03f79d71b4cb0a89) >> 58];
 }
 
+inline int BitScanReverse64(uint64_t x) {
+#if defined(_MSC_VER)
+    unsigned long index;
+    _BitScanReverse64(&index, x);
+    return static_cast<int>(index);
+#else
+    return 63 - __builtin_clzll(x);
+#endif
+}
+
 inline int popcount64(uint64_t x) {
 #if defined(_MSC_VER)
     return static_cast<int>(__popcnt64(x));

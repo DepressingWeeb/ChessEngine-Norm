@@ -3,6 +3,7 @@
 #include "ttable.h"
 #include <vector>
 #include "utils.h"
+#include "constant_eval.h"
 class BitBoard {
 private:
     int halfMoves;
@@ -189,7 +190,9 @@ public:
     uint64_t getPinnedPiece(uint64_t occupied, int pos, Side side);
     uint64_t getAllAttackSquares(Side side);
     uint64_t getSingleCheckInterposingSquares(uint64_t occupied, int kingPos, Side side);
+    bool isEndgame();
     bool isValidMove(Move& move);
+    bool isThreat(const Move& move);
     bool SEE_GE(Move m, int threashold);
     int evaluate(int alpha, int beta);
     int posToRank(int pos) {
@@ -219,13 +222,12 @@ public:
     bool isConnectedPawn(Side side, int pawnPos) {
         return arrPawnAttacks[!side][pawnPos] & pieceBB[side][Piece::pawn];
     }
-    bool isEndgame() {
-        uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]) & ~(pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn]);
-        int nPieces = popcount64(occupied);
-        return (nPieces <= 4);
-    }
     bool isRepeatedPosition() {
         return repetitionTable.isRepetition();
+    }
+    uint64_t nonPawnMaterial(Side side) {
+        return pieceBB[side][Piece::knight] | pieceBB[side][Piece::bishop] |
+            pieceBB[side][Piece::rook] | pieceBB[side][Piece::queen];
     }
     bool isNullMoveEnable() {
         uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
@@ -233,4 +235,17 @@ public:
         //number of piece >6 and not king and pawn endgame
         return (nPieces > 6) && (occupied & ~(pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn] | pieceBB[Side::White][Piece::king] | pieceBB[Side::Black][Piece::king]));
     }
+    // Pawn hash table
+    struct PawnEntry {
+        uint64_t pawnHash;
+        int score[2];
+        bool valid;
+    };
+    static constexpr int PAWN_TABLE_SIZE = 1 << 16; // 64K entries
+    PawnEntry pawnHashTable[PAWN_TABLE_SIZE];
+
+    int quickMaterialScore();
+    int probePawnHash(uint64_t pawnHash, int* score);
+    void storePawnHash(uint64_t pawnHash, int score[2]);
+    uint64_t getPawnHash();
 };

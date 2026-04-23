@@ -1,6 +1,6 @@
+#pragma once
 #include "bitboard.h"
 #include "constant_bitboard.h"
-#include "constant_eval.h"
 #include "constant_hash.h"
 #include <sstream>
 
@@ -8,6 +8,7 @@ BitBoard::BitBoard() {
     initConstant();
     initMagic();
     parseFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    memset(pawnHashTable, 0, sizeof(pawnHashTable));
 }
 std::pair<int, int> BitBoard::posToRowCol(int pos) {
     return std::make_pair(pos / 8, pos % 8);
@@ -105,6 +106,7 @@ BitBoard::BitBoard(std::string fen) {
     initConstant();
     initMagic();
     parseFEN(fen);
+    memset(pawnHashTable, 0, sizeof(pawnHashTable));
 }
 
 void BitBoard::parseFEN(std::string fen) {
@@ -179,6 +181,10 @@ void BitBoard::parseFEN(std::string fen) {
         currPos++;
     }
     isWhiteTurn = v[1][0] == 'w';
+    castingRight[Side::White][0] = false;
+    castingRight[Side::White][1] = false;
+    castingRight[Side::Black][0] = false;
+    castingRight[Side::Black][1] = false;
     for (int i = 0; i < v[2].size(); i++) {
         switch (v[2][i])
         {
@@ -2345,283 +2351,604 @@ bool BitBoard::SEE_GE(Move m, int threshold) {
 
     return bool(res);
 }
+bool BitBoard::isThreat(const Move& move) {
+    const Side     sideToMove = move.getSideToMove();
+    const Side     opSide =  sideToMove == Side::White ? Side::Black : Side::White;
+    const int      startPos = move.getStartPos();
+    const int      endPos = move.getEndPos();
+    const MoveType mt = move.getMoveType();
+    const Piece    movePiece = move.getMovePiece();
 
+    // Queens can never threaten a higher-value piece — bail immediately.
+    // This also covers all queen-promotion moves.
+    if (movePiece == Piece::queen)
+        return false;
+
+    // ── Effective piece after non-queen promotion ─────────────────────────────
+    Piece effectivePiece = movePiece;
+    switch (mt) {
+    case MoveType::PROMOTION_ROOK:
+    case MoveType::PROMOTION_ROOK_AND_CAPTURE:    effectivePiece = Piece::rook;   break;
+    case MoveType::PROMOTION_BISHOP:
+    case MoveType::PROMOTION_BISHOP_AND_CAPTURE:  effectivePiece = Piece::bishop; break;
+    case MoveType::PROMOTION_KNIGHT:
+    case MoveType::PROMOTION_KNIGHT_AND_CAPTURE:  effectivePiece = Piece::knight; break;
+    default: break;
+    }
+
+    // ── Post-move occupancy ───────────────────────────────────────────────────
+    uint64_t occ = pieceBB[0][Piece::any] | pieceBB[1][Piece::any];
+    occ ^= (1ull << startPos);
+    occ |= (1ull << endPos);
+    if (mt == MoveType::EN_PASSANT) {
+        const int capturedPawnSq = (sideToMove == Side::White) ? endPos - 8 : endPos + 8;
+        occ ^= (1ull << capturedPawnSq);
+    }
+
+    // ── Attack squares from destination ──────────────────────────────────────
+    uint64_t atkSq = 0;
+    switch (effectivePiece) {
+    case Piece::pawn:   atkSq = arrPawnAttacks[sideToMove][endPos];                              break;
+    case Piece::knight: atkSq = arrKnightAttacks[endPos];                                        break;
+    case Piece::bishop: atkSq = getBishopAttackSquares(occ, endPos);                             break;
+    case Piece::rook:   atkSq = getRookAttackSquares(occ, endPos);                               break;
+    case Piece::king:   atkSq = arrKingAttacks[endPos];                                          break;
+    default:            return false;
+    }
+
+    // ── Hit any opponent piece worth strictly more than the mover? ────────────
+    const int myValue = pieceValue[effectivePiece];
+    for (int p = Piece::pawn; p <= Piece::queen; p++) {
+        if (pieceValue[p] > myValue && (atkSq & pieceBB[opSide][p])) {
+            
+            return true;
+        }
+    }
+    return false;
+}
+int BitBoard::quickMaterialScore() {
+    int score = 0;
+    for (int p = Piece::pawn; p <= Piece::queen; p++) {
+        score += popcount64(pieceBB[Side::White][p]) * materialValue[p];
+        score -= popcount64(pieceBB[Side::Black][p]) * materialValue[p];
+    }
+    return score * (isWhiteTurn ? 1 : -1);
+}
+bool BitBoard::isEndgame() {
+    // Mirror the phase calculation from evaluate():
+    //   knights  → 1 each
+    //   bishops  → 1 each
+    //   rooks    → 2 each
+    //   queens   → 4 each
+    // TOTAL_PHASE is the starting value (full middlegame).
+    // When the remaining phase falls to ≤ 50% of TOTAL_PHASE, call it endgame.
+
+    int phase = TOTAL_PHASE;
+
+    phase -= popcount64(pieceBB[0][Piece::knight] | pieceBB[1][Piece::knight]);
+    phase -= popcount64(pieceBB[0][Piece::bishop] | pieceBB[1][Piece::bishop]);
+    phase -= popcount64(pieceBB[0][Piece::rook] | pieceBB[1][Piece::rook]) * 2;
+    phase -= popcount64(pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) * 4;
+
+    // phase==0 → pure endgame, phase==TOTAL_PHASE → pure opening/middlegame.
+    // Threshold at 25% of TOTAL_PHASE remaining (≈ one rook + one minor piece left).
+    return phase <= TOTAL_PHASE / 3;
+}
+uint64_t BitBoard::getPawnHash() {
+    // Simple XOR hash of pawn positions — fast and sufficient
+    uint64_t h = pieceBB[Side::White][Piece::pawn] * 0x9e3779b97f4a7c15ULL;
+    h ^= pieceBB[Side::Black][Piece::pawn] * 0xbf58476d1ce4e5b9ULL;
+    return h;
+}
+
+int BitBoard::probePawnHash(uint64_t pawnHash, int* score) {
+    PawnEntry& entry = pawnHashTable[pawnHash & (PAWN_TABLE_SIZE - 1)];
+    if (entry.valid && entry.pawnHash == pawnHash) {
+        score[0] = entry.score[0];
+        score[1] = entry.score[1];
+        return 1; // hit
+    }
+    return 0; // miss
+}
+
+void BitBoard::storePawnHash(uint64_t pawnHash, int score[2]) {
+    PawnEntry& entry = pawnHashTable[pawnHash & (PAWN_TABLE_SIZE - 1)];
+    entry.pawnHash = pawnHash;
+    entry.score[0] = score[0];
+    entry.score[1] = score[1];
+    entry.valid = true;
+}
 int BitBoard::evaluate(int alpha, int beta) {
-    uint64_t occupied = (pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
-
-    int who2move = (isWhiteTurn ? 1 : -1);
-    int totalOcc = popcount64((pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]));
-
+    uint64_t occupied = pieceBB[0][Piece::any] | pieceBB[1][Piece::any];
+    const int who2move = isWhiteTurn ? 1 : -1;
+    const int totalOcc = popcount64(occupied);
 
     int score[2]{ 0 };
     int phase = TOTAL_PHASE;
 
-    int kingPos[2] = {
-        BitScanForward64(pieceBB[Side::White][Piece::king]),
-        BitScanForward64(pieceBB[Side::Black][Piece::king])
+    const int kingPos[2] = {
+        BitScanForward64(pieceBB[0][Piece::king]),
+        BitScanForward64(pieceBB[1][Piece::king])
     };
-    int rankKing[2] = { posToRank(kingPos[0]) , posToRank(kingPos[1]) };
-    int fileKing[2] = { posToFile(kingPos[0]) , posToFile(kingPos[1]) };
-    bool halve = false;
-    if (totalOcc <= 6 && (pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) == 0) {
-        int diffQueens = static_cast<int>(popcount64(pieceBB[Side::White][Piece::queen]) - popcount64(pieceBB[Side::Black][Piece::queen]))
-            * pieceValue[Piece::queen];
-        int diffRooks = static_cast<int>(popcount64(pieceBB[Side::White][Piece::rook]) - popcount64(pieceBB[Side::Black][Piece::rook]))
-            * pieceValue[Piece::rook];
-        int diffKnights = static_cast<int>(popcount64(pieceBB[Side::White][Piece::knight]) - popcount64(pieceBB[Side::Black][Piece::knight]))
-            * pieceValue[Piece::knight];
-        int diffBishops = static_cast<int>(popcount64(pieceBB[Side::White][Piece::bishop]) - popcount64(pieceBB[Side::Black][Piece::bishop]))
-            * pieceValue[Piece::bishop];
-        int diffMaterial = diffQueens + diffRooks + diffKnights + diffBishops;
-        if ((pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0) {
-            if (abs(diffMaterial) <= 300) {
-                halve = true;
-            }
-        }
-    }
-    int totalWeightedKingDistToOwnPawn[2]{ 0 };
-    int sumOfWeightDist[2]{ 0 };
+    const int rankKing[2] = { posToRank(kingPos[0]), posToRank(kingPos[1]) };
+    const int fileKing[2] = { posToFile(kingPos[0]), posToFile(kingPos[1]) };
 
-    uint64_t attacks = 0;
-    uint64_t isDoublePawn = false;
-    bool isIsolatedPawn = false;
-    Side stm = isWhiteTurn ? Side::White : Side::Black;
-    uint64_t pawnSet = pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn];
-    uint64_t allPieces[2] = {
+    // ── Halve detection ───────────────────────────────────────────────────────
+    bool halve = false;
+    if (totalOcc <= 6
+        && (pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) == 0
+        && (pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0)
+    {
+        const int diffMaterial =
+            (popcount64(pieceBB[0][Piece::rook]) - popcount64(pieceBB[1][Piece::rook])) * pieceValue[Piece::rook] +
+            (popcount64(pieceBB[0][Piece::knight]) - popcount64(pieceBB[1][Piece::knight])) * pieceValue[Piece::knight] +
+            (popcount64(pieceBB[0][Piece::bishop]) - popcount64(pieceBB[1][Piece::bishop])) * pieceValue[Piece::bishop];
+        if (abs(diffMaterial) <= 300)
+            halve = true;
+    }
+
+    // ── Pawn hash ─────────────────────────────────────────────────────────────
+    const uint64_t pawnHash = getPawnHash();
+    int pawnScore[2] = { 0, 0 };
+    const bool pawnCacheHit = probePawnHash(pawnHash, pawnScore);
+
+    // ── Shared precomputed masks ──────────────────────────────────────────────
+    const Side stm = isWhiteTurn ? Side::White : Side::Black;
+    const uint64_t pawnSet = pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn];
+
+    const uint64_t allPieces[2] = {
         pieceBB[0][Piece::any] & ~pieceBB[0][Piece::pawn],
         pieceBB[1][Piece::any] & ~pieceBB[1][Piece::pawn]
     };
-    uint64_t allHeavyPieces[2] = {
+    const uint64_t allHeavyPieces[2] = {
         allPieces[0] & ~(pieceBB[0][Piece::bishop] | pieceBB[0][Piece::knight]),
         allPieces[1] & ~(pieceBB[1][Piece::bishop] | pieceBB[1][Piece::knight])
     };
-    int nMobility;
+
+    int rawKingSafety[2] = { 0, 0 };
+    int totalWeightedKingDistToOwnPawn[2] = { 0, 0 };
+    int sumOfWeightDist[2] = { 0, 0 };
+
+    // ── Per-side setup ────────────────────────────────────────────────────────
+    // Precompute everything that is side-invariant within the piece loops below.
+    // Indexed [side]: opponent pawn attacks, king rings, defender counts, etc.
+
+    uint64_t opPawnAttacks[2];
+    uint64_t opPawnSetAtkSq[2];
+    uint64_t opInner[2];       // king inner ring of the opponent
+    uint64_t opOuter[2];       // king outer ring of the opponent
+    int      nDef20[2];        // defender weight around own king, scaled ×20
+    int      nAtk20[2] = { 0, 0 };
+    int      totalAtkUnits[2] = { 0, 0 };
+
     for (int side = 0; side < 2; side++) {
+        const int op = side ^ 1;
 
-        uint64_t occupied2 = pieceBB[side][Piece::any];
-        int opKingPos = kingPos[!side];
-        int ownKingPos = kingPos[side];
-        uint64_t opKingInnerRing = getKingAttackSquares(opKingPos);
+        opInner[side] = getKingAttackSquares(kingPos[op]);
+        opOuter[side] = arrOuterRing[kingPos[op]];
 
-        uint64_t opKingOuterRing = arrOuterRing[opKingPos];
-        uint64_t kingInnerRing = getKingAttackSquares(ownKingPos);
-        uint64_t kingOuterRing = arrOuterRing[ownKingPos];
-        int flip = side == Side::White ? 56 : 0;
-        uint64_t myPiece = occupied2;
-        float nAttackers = 0;
-        float nDefenders = static_cast<float>(popcount64(pieceBB[!side][Piece::pawn] & opKingInnerRing)) * 0.5f
-            + static_cast<float>(popcount64(pieceBB[!side][Piece::pawn] & opKingOuterRing)) * 0.2f;
-        uint64_t pieces = pieceBB[!side][Piece::any] ^ pieceBB[!side][Piece::pawn];
-        nDefenders += popcount64(pieces & opKingInnerRing) * 1.0f + popcount64(pieces & opKingOuterRing) * 0.5f;
-        int totalAtkUnits = 0;
-        int nAtksOnInnerRing = 0;
-        int nAtksOnOuterRing = 0;
-        int nDefsOnInnerRing = 0;
-        int pawnPushOffset = side == Side::White ? 8 : -8;
-        bool sideIsSTM = side == stm;
-        Side opSide = static_cast<Side>(!side);
-        uint64_t opPawnSetAtkSq = side == Side::Black ?
-            (((pieceBB[!side][Piece::pawn] << 7ull) & ~0x8080808080808080ull) | ((pieceBB[!side][Piece::pawn] << 9ull) & ~0x0101010101010101ull)) :
-            (((pieceBB[!side][Piece::pawn] >> 7ull) & ~0x0101010101010101ull) | ((pieceBB[!side][Piece::pawn] >> 9ull) & ~0x8080808080808080ull));
-        opPawnSetAtkSq = opPawnSetAtkSq & ~allPieces[opSide];
-        if (popcount64(pieceBB[side][Piece::bishop]) == 2) {
-            score[side] += bishopPairBonus;
-        }
-        while (occupied2) {
-            int pos = BitScanForward64(occupied2);
-            occupied2 ^= (1ull << pos);
+        const uint64_t opPawns = pieceBB[op][Piece::pawn];
+        const uint64_t opNonPawns = pieceBB[op][Piece::any] ^ opPawns;
 
-            Piece piece = pieceTable[pos];
-            //Material
-            score[side] += materialValue[piece];
+        // side==0 (White) is attacked by Black (op==1) pawns that push downward
+        opPawnAttacks[side] = (side == 1)
+            ? (((opPawns << 7) & ~0x8080808080808080ULL) | ((opPawns << 9) & ~0x0101010101010101ULL))
+            : (((opPawns >> 7) & ~0x0101010101010101ULL) | ((opPawns >> 9) & ~0x8080808080808080ULL));
 
-            int posFlipped = pos ^ flip;
-            if (piece == Piece::pawn) {
-                int rankPawn = posToRank(pos);
-                int filePawn = posToFile(pos);
-                int weight = 3;
-                int manhattanDist = std::abs(rankKing[side] - rankPawn) + std::abs(fileKing[side] - filePawn);
-                if (isPassedPawn(static_cast<Side>(side), static_cast<Side>(!side), pos)) {
-                    //flip to white perspective
-                    if (side == Side::Black)
-                        rankPawn = 7 - rankPawn;
-                    score[side] += bonusPassedPawnByRank[rankPawn];
-                    if (isConnectedPawn(static_cast<Side>(side), pos)) {
-                        score[side] += bonusConnectedPassedPawn;
+        opPawnSetAtkSq[side] = opPawnAttacks[side] & ~allPieces[op];
+
+        // Defenders around the king being attacked, scaled ×20
+        // 0.5 per inner pawn → 10, 0.2 per outer pawn → 4,
+        // 1.0 per inner piece → 20, 0.5 per outer piece → 10
+        nDef20[side] =
+            popcount64(opPawns & opInner[side]) * 10 +
+            popcount64(opPawns & opOuter[side]) * 4 +
+            popcount64(opNonPawns & opInner[side]) * 20 +
+            popcount64(opNonPawns & opOuter[side]) * 10;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Per-piece-type loops — one tight loop per piece, both sides interleaved
+    // so all shared tables (PST, attack tables) stay hot in L1/L2.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // ── PAWNS ─────────────────────────────────────────────────────────────────
+    // Tables touched: pawnTable, arrPawnAttacks, arrAfterPawn,
+    //                 arrNeighorPawn, arrFrontPawn, bonusPassedPawnByRank
+    for (int side = 0; side < 2; side++) {
+        const int      op = side ^ 1;
+        const int      flip = (side == 0) ? 56 : 0;
+        const int      pushOff = (side == 0) ? 8 : -8;
+        const bool     isSTM = (side == (int)stm);
+        const uint64_t myBB = pieceBB[side][Piece::pawn];
+
+        score[side] += popcount64(myBB) * materialValue[Piece::pawn];
+
+        uint64_t bb = myBB;
+        while (bb) {
+            const int pos = BitScanForward64(bb);
+            bb &= bb - 1;
+
+            const int rankPawn = posToRank(pos);
+            const int filePawn = posToFile(pos);
+            const bool passed = isPassedPawn(static_cast<Side>(side),
+                static_cast<Side>(op), pos);
+
+            // ── Pawn structure (cached) ──────────────────────────────────────
+            if (!pawnCacheHit) {
+                pawnScore[side] += pawnTable[pos ^ flip];
+
+                if (arrAfterPawn[side][pos] & myBB)
+                    pawnScore[side] -= pawnDoublePenalty;
+
+                const bool isolated = !(arrNeighorPawn[pos] & myBB);
+                if (isolated)
+                    pawnScore[side] -= pawnIsolatedPenalty;
+                const int rankFlip = (side == 1) ? (7 - rankPawn) : rankPawn;
+                uint64_t adjSameRank = 0ULL;
+                if (filePawn > 0) adjSameRank |= (1ULL << (pos - 1));
+                if (filePawn < 7) adjSameRank |= (1ULL << (pos + 1));
+
+                if (myBB & adjSameRank)
+                    pawnScore[side] += phalanxBonus[rankFlip];
+                if (passed) {
+                    
+                    pawnScore[side] += bonusPassedPawnByRank[rankFlip];
+
+                    if (isConnectedPawn(static_cast<Side>(side), pos))
+                        pawnScore[side] += bonusConnectedPassedPawn;
+
+                    const int   frontSq = pos + pushOff;
+                    const Piece frontPce = pieceTable[frontSq];
+                    if (frontPce != Piece::any) {
+                        pawnScore[side] -= ((1ULL << frontSq) & pieceBB[op][Piece::any])
+                            ? penaltyPasserBlockedByEnemy
+                            : penaltyPasserBlockedBySelf;
+                        pawnScore[side] -= penaltyBlockedPasserByRank[rankFlip];
                     }
-                    //Check for piece in front of pawn
 
-                    if (pieceTable[pos + pawnPushOffset] != Piece::any) {
-                        score[side] -= penaltyBlockedPasserByRank[rankPawn];
+                    if (rankFlip >= 4) {
+                        if (arrAfterPawn[op][pos] & pieceBB[side][Piece::rook])
+                            pawnScore[side] += bonusRookSupportPasser;
+                        if (arrAfterPawn[side][pos] & pieceBB[op][Piece::rook])
+                            pawnScore[side] -= penaltyEnemyRookBlockPasser;
                     }
-                    if (arrAfterPawn[!side][pos] & pieceBB[side][Piece::rook] && rankPawn >= 4)
-                        score[side]+=bonusRookSupportPasser;
-                    if (arrAfterPawn[side][pos] & pieceBB[!side][Piece::rook] && rankPawn >= 4)
-                        score[side] -= penaltyEnemyRookBlockPasser;
-                    if (arrAfterPawn[side][pos] & pieceBB[!side][Piece::any] && rankPawn >= 5)
-                        score[side] -= penaltyHasBlockade;
+                    if (rankFlip >= 5 && (arrAfterPawn[side][pos] & pieceBB[op][Piece::any]))
+                        pawnScore[side] -= penaltyHasBlockade;
                     if (filePawn == 0 || filePawn == 7)
-                        score[side] += bonusOutsidePasser;
-                   
-                    weight = 6;
-                }
-                totalWeightedKingDistToOwnPawn[side] += weight * manhattanDist;
-                sumOfWeightDist[side] += weight;
+                        pawnScore[side] += bonusOutsidePasser;
 
-
-                isDoublePawn = arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn];
-                isIsolatedPawn = !(arrNeighorPawn[pos] & pieceBB[side][Piece::pawn]);
-                if (isDoublePawn) {
-                    score[side] -= pawnDoublePenalty;
                 }
-                if (isIsolatedPawn) {
-                    score[side] -= pawnIsolatedPenalty;
-                }
-                score[side] += pawnTable[posFlipped];
-                attacks = arrPawnAttacks[side][pos];
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 0.5f;
-                else if (nAtksOnOuterRing)
-                    nAttackers += 0.25f;
-                totalAtkUnits += nAtksOnInnerRing * 2 + nAtksOnOuterRing;
-                if (sideIsSTM && (attacks & allPieces[opSide])) {
-                    score[side] += bonusThreatOnHigherValuePiece[1];
-                }
-            }
-            else if (piece == Piece::knight) {
-                phase--;
-                score[side] += knightTable[posFlipped];
-                attacks = getKnightAttackSquares(pos) & ~(myPiece | opPawnSetAtkSq);
-                if (sideIsSTM && (attacks & allHeavyPieces[opSide])) {
-                    score[side] += bonusThreatOnHigherValuePiece[1];
-                }
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1.0f;
-                else if (nAtksOnOuterRing)
-                    nAttackers += 0.5f;
-                totalAtkUnits += nAtksOnInnerRing * 3 + nAtksOnOuterRing * 2;
-                nMobility = popcount64(attacks);
-                score[side] += nMobility * mobilityValue[Piece::knight];
-                if (nMobility == 0) {
-                    score[side] -= penaltyNoMobility[Piece::knight];
-                }
-            }
-            else if (piece == Piece::bishop) {
-                phase--;
-                score[side] += bishopTable[posFlipped];
-                attacks = getBishopAttackSquares(occupied, pos) & ~(myPiece | opPawnSetAtkSq);
-                if (sideIsSTM && (attacks & allHeavyPieces[opSide])) {
-                    score[side] += bonusThreatOnHigherValuePiece[1];
-                }
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1.0f;
-                else if (nAtksOnOuterRing)
-                    nAttackers += 0.5f;
-                totalAtkUnits += nAtksOnInnerRing * 3 + nAtksOnOuterRing * 2;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::bishop];
-            }
-            else if (piece == Piece::rook) {
-                phase -= 2;
-                score[side] += rookTable[posFlipped];
-                if (!(arrAfterPawn[side][pos] & pawnSet))
-                    score[side] += bonusRookOnOpenFile;
-                else if (!(arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn]))
-                    score[side] += bonusRookOnSemiOpenFile;
-                attacks = getRookAttackSquares(occupied, pos) & ~(myPiece | opPawnSetAtkSq);
-                if (sideIsSTM && (attacks & pieceBB[opSide][Piece::queen])) {
-                    score[side] += bonusThreatOnHigherValuePiece[1];
-                }
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 1.0f;
-                else if (nAtksOnOuterRing)
-                    nAttackers += 0.5f;
-                totalAtkUnits += nAtksOnInnerRing * 4 + nAtksOnOuterRing * 3;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::rook];
-            }
-            else if (piece == Piece::queen) {
-                phase -= 4;
-                score[side] += queenTable[posFlipped];
-                attacks = (getRookAttackSquares(occupied, pos) | getBishopAttackSquares(occupied, pos)) & ~(myPiece | opPawnSetAtkSq);
-                nAtksOnInnerRing = popcount64(attacks & opKingInnerRing);
-                nAtksOnOuterRing = popcount64(attacks & opKingOuterRing);
-                if (nAtksOnInnerRing)
-                    nAttackers += 2.0f;
-                else if (nAtksOnOuterRing)
-                    nAttackers += 1.0f;
-                totalAtkUnits += nAtksOnInnerRing * 5 + nAtksOnOuterRing * 4;
-                score[side] += popcount64(attacks) * mobilityValue[Piece::queen];
-            }
-            else if (piece == Piece::king) {
-                score[side] += kingTable[posFlipped];
-                attacks = getKingAttackSquares(pos) & ~(myPiece | opPawnSetAtkSq);
-                nMobility = popcount64(attacks);
-                score[side] += nMobility * mobilityValue[Piece::king];
-                if (nMobility == 0) {
-                    score[side] -= penaltyNoMobility[Piece::king];
+                else if (!isolated) {
+                    const uint64_t adj = arrNeighorPawn[pos] & myBB;
+                    if ((adj & ~arrFrontPawn[side][pos]) == 0) {
+                        if (arrPawnAttacks[side][pos + pushOff] & pieceBB[op][Piece::pawn])
+                            pawnScore[side] -= pawnBackwardPenalty;
+                    }
                 }
             }
 
-        }
+            // ── Promo-square king distances (EG, outside cache) ─────────────
+            if (passed) {
+                const int rankFlip = (side == 1) ? (7 - rankPawn) : rankPawn;
+                const int promFile = filePawn;
+                const int promRank = (side == 0) ? 7 : 0;
+                const int opDistPromo = std::max(abs(posToFile(kingPos[op]) - promFile),
+                    abs(posToRank(kingPos[op]) - promRank));
+                const int myDistPromo = std::max(abs(posToFile(kingPos[side]) - promFile),
+                    abs(posToRank(kingPos[side]) - promRank));
+                score[side] += opDistPromo * promoDistOpWeight;
+                score[side] -= myDistPromo * promoDistMyWeight;
+            }
 
-        if (nAttackers >= 3) {
-            score[side] += SafetyTable[totalAtkUnits] * (nAttackers - nDefenders);
+            // ── King–pawn tropism ────────────────────────────────────────────
+            const int weight = passed ? 6 : 3;
+            const int mDist = abs(rankKing[side] - rankPawn) + abs(fileKing[side] - filePawn);
+            totalWeightedKingDistToOwnPawn[side] += weight * mDist;
+            sumOfWeightDist[side] += weight;
+
+            // ── King attack contribution ─────────────────────────────────────
+            const uint64_t atkSq = arrPawnAttacks[side][pos];
+            const int nAtksI = popcount64(atkSq & opInner[side]);
+            const int nAtksO = popcount64(atkSq & opOuter[side]);
+            if (nAtksI) nAtk20[side] += 10;   // 0.50 × 20
+            else if (nAtksO) nAtk20[side] += 5;   // 0.25 × 20
+            totalAtkUnits[side] += nAtksI * 2 + nAtksO;
+
+            if (isSTM && (atkSq & allPieces[op]))
+                score[side] += bonusThreatOnHigherValuePiece[1];
         }
     }
-    //king safety-related
-    uint64_t pawnsBBAll = pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn];
+
+    // ── KNIGHTS ──────────────────────────────────────────────────────────────
+    // Tables touched: knightTable, getKnightAttackSquares (magic/array),
+    //                 arrPawnAttacks, arrFrontPawn, arrNeighorPawn
     for (int side = 0; side < 2; side++) {
-        uint64_t kingAttacks = getKingAttackSquares(kingPos[side]);
-        int nPawnsSurroundKing = popcount64(kingAttacks & pieceBB[side][Piece::pawn]);
-        int nSemiOpenFilesKing = 0;
-        if (fileKing[side] == 0) {
-            nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] + 1] & pieceBB[side][Piece::pawn]));
+        const int      op = side ^ 1;
+        const int      flip = (side == 0) ? 56 : 0;
+        const bool     isSTM = (side == (int)stm);
+        const uint64_t myBB = pieceBB[side][Piece::any];
+
+        uint64_t bb = pieceBB[side][Piece::knight];
+        while (bb) {
+            const int pos = BitScanForward64(bb);
+            bb &= bb - 1;
+
+            --phase;
+            score[side] += materialValue[Piece::knight];
+            score[side] += knightTable[pos ^ flip];
+
+            const uint64_t atkSq = getKnightAttackSquares(pos) & ~myBB;
+            const int nAtksI = popcount64(atkSq & opInner[side]);
+            const int nAtksO = popcount64(atkSq & opOuter[side]);
+            if (nAtksI) nAtk20[side] += 20;   // 1.0 × 20
+            else if (nAtksO) nAtk20[side] += 10;   // 0.5 × 20
+            totalAtkUnits[side] += nAtksI * 3 + nAtksO * 2;
+
+            if (isSTM && (atkSq & allHeavyPieces[op]))
+                score[side] += bonusThreatOnHigherValuePiece[1];
+
+            // Outpost
+            if ((arrPawnAttacks[op][pos] & pieceBB[side][Piece::pawn]) &&
+                !(pieceBB[op][Piece::pawn] & arrFrontPawn[side][pos] & arrNeighorPawn[pos]))
+                score[side] += bonusOutpostKnight;
+
+            const int mob = popcount64(atkSq & ~opPawnAttacks[side]);
+            score[side] += mob * mobilityValue[Piece::knight];
+            if (mob == 0)
+                score[side] -= penaltyNoMobility[Piece::knight];
         }
-        else if (fileKing[side] == 7) {
-            nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] - 1] & pieceBB[side][Piece::pawn]));
-        }
-        else {
-            nSemiOpenFilesKing = (!(arrAfterPawn[side][kingPos[side]] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] + 1] & pieceBB[side][Piece::pawn])) + (!(arrAfterPawn[side][kingPos[side] - 1] & pieceBB[side][Piece::pawn]));
-        }
-        score[side] += nPawnsSurroundKing * bonusPawnSurroundKing;
-        score[side] -= semiOpenFilesPenalty[nSemiOpenFilesKing];
     }
 
+    // ── BISHOPS ──────────────────────────────────────────────────────────────
+    // Tables touched: bishopTable, getBishopAttackSquares (magic),
+    //                 arrPawnAttacks, arrFrontPawn, arrNeighorPawn
+    for (int side = 0; side < 2; side++) {
+        const int      op = side ^ 1;
+        const int      flip = (side == 0) ? 56 : 0;
+        const bool     isSTM = (side == (int)stm);
+        const uint64_t myBB = pieceBB[side][Piece::any];
+
+        if (popcount64(pieceBB[side][Piece::bishop]) == 2)
+            score[side] += bishopPairBonus;
+
+        uint64_t bb = pieceBB[side][Piece::bishop];
+        while (bb) {
+            const int pos = BitScanForward64(bb);
+            bb &= bb - 1;
+
+            --phase;
+            score[side] += materialValue[Piece::bishop];
+            score[side] += bishopTable[pos ^ flip];
+
+            const uint64_t atkSq = getBishopAttackSquares(occupied, pos) & ~myBB;
+            const int nAtksI = popcount64(atkSq & opInner[side]);
+            const int nAtksO = popcount64(atkSq & opOuter[side]);
+            if (nAtksI) nAtk20[side] += 20;
+            else if (nAtksO) nAtk20[side] += 10;
+            totalAtkUnits[side] += nAtksI * 3 + nAtksO * 2;
+
+            if (isSTM && (atkSq & allHeavyPieces[op]))
+                score[side] += bonusThreatOnHigherValuePiece[1];
+
+            // Outpost
+            if ((arrPawnAttacks[op][pos] & pieceBB[side][Piece::pawn]) &&
+                !(pieceBB[op][Piece::pawn] & arrFrontPawn[side][pos] & arrNeighorPawn[pos]))
+                score[side] += bonusOutpostBishop;
+
+            // Bad bishop: own pawns on same-color squares
+            const bool     onLight = (posToFile(pos) + posToRank(pos)) % 2 == 0;
+            const uint64_t sameColor = onLight ? 0x55AA55AA55AA55AAULL
+                : 0xAA55AA55AA55AA55ULL;
+            score[side] -= popcount64(pieceBB[side][Piece::pawn] & sameColor) * penaltyBadBishop;
+
+            score[side] += popcount64(atkSq & ~opPawnAttacks[side]) * mobilityValue[Piece::bishop];
+        }
+    }
+
+    // ── ROOKS ────────────────────────────────────────────────────────────────
+    // Tables touched: rookTable, getRookAttackSquares (magic),
+    //                 arrAfterPawn, pawnSet
+    for (int side = 0; side < 2; side++) {
+        const int      op = side ^ 1;
+        const int      flip = (side == 0) ? 56 : 0;
+        const bool     isSTM = (side == (int)stm);
+        const uint64_t myBB = pieceBB[side][Piece::any];
+        const int      rank7 = (side == 0) ? 6 : 1;
+        const int      rank8 = (side == 0) ? 7 : 0;
+        const uint64_t r7mask = 0xFFULL << (rank7 * 8);
+
+        uint64_t bb = pieceBB[side][Piece::rook];
+        while (bb) {
+            const int pos = BitScanForward64(bb);
+            bb &= bb - 1;
+
+            phase -= 2;
+            score[side] += materialValue[Piece::rook];
+            score[side] += rookTable[pos ^ flip];
+
+            // Open / semi-open file
+            if (!(arrAfterPawn[side][pos] & pawnSet))
+                score[side] += bonusRookOnOpenFile;
+            else if (!(arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn]))
+                score[side] += bonusRookOnSemiOpenFile;
+
+            // Rook on 7th rank
+            if (posToRank(pos) == rank7) {
+                if ((pieceBB[op][Piece::pawn] & r7mask) || posToRank(kingPos[op]) == rank8) {
+                    score[side] += bonusRookOn7th;
+                    if (pieceBB[side][Piece::rook] & r7mask & ~(1ULL << pos))
+                        score[side] += bonusRookOn7thWithAnother;
+                }
+            }
+
+            // Connected rooks (only the lower-indexed rook pays the bonus)
+            const uint64_t otherRooks = pieceBB[side][Piece::rook] & ~(1ULL << pos);
+            if (otherRooks && BitScanForward64(pieceBB[side][Piece::rook]) == pos) {
+                if (getRookAttackSquares(occupied, pos) & otherRooks)
+                    score[side] += bonusConnectedRooks;
+            }
+
+            const uint64_t atkSq = getRookAttackSquares(occupied, pos) & ~myBB;
+            const int nAtksI = popcount64(atkSq & opInner[side]);
+            const int nAtksO = popcount64(atkSq & opOuter[side]);
+            if (nAtksI) nAtk20[side] += 20;
+            else if (nAtksO) nAtk20[side] += 10;
+            totalAtkUnits[side] += nAtksI * 4 + nAtksO * 3;
+
+            if (isSTM && (atkSq & pieceBB[op][Piece::queen]))
+                score[side] += bonusThreatOnHigherValuePiece[1];
+
+            score[side] += popcount64(atkSq & ~opPawnAttacks[side]) * mobilityValue[Piece::rook];
+        }
+    }
+
+    // ── QUEENS ───────────────────────────────────────────────────────────────
+    // Tables touched: queenTable, getRookAttackSquares + getBishopAttackSquares
+    for (int side = 0; side < 2; side++) {
+        const int      op = side ^ 1;
+        const int      flip = (side == 0) ? 56 : 0;
+        const uint64_t myBB = pieceBB[side][Piece::any];
+
+        uint64_t bb = pieceBB[side][Piece::queen];
+        while (bb) {
+            const int pos = BitScanForward64(bb);
+            bb &= bb - 1;
+
+            phase -= 4;
+            score[side] += materialValue[Piece::queen];
+            score[side] += queenTable[pos ^ flip];
+
+            const uint64_t atkSq = (getRookAttackSquares(occupied, pos)
+                | getBishopAttackSquares(occupied, pos)) & ~myBB;
+            const int nAtksI = popcount64(atkSq & opInner[side]);
+            const int nAtksO = popcount64(atkSq & opOuter[side]);
+            if (nAtksI) nAtk20[side] += 40;  // 2.0 × 20
+            else if (nAtksO) nAtk20[side] += 20;  // 1.0 × 20
+            totalAtkUnits[side] += nAtksI * 5 + nAtksO * 4;
+
+            score[side] += popcount64(atkSq & ~opPawnAttacks[side]) * mobilityValue[Piece::queen];
+        }
+    }
+
+    // ── KINGS ────────────────────────────────────────────────────────────────
+    // Tables touched: kingTable, getKingAttackSquares
+    for (int side = 0; side < 2; side++) {
+        const int      flip = (side == 0) ? 56 : 0;
+        const uint64_t myBB = pieceBB[side][Piece::any];
+
+        const int pos = kingPos[side];
+        score[side] += kingTable[pos ^ flip];
+
+        const uint64_t atkSq = getKingAttackSquares(pos) & ~myBB & ~opPawnAttacks[side];
+        const int mob = popcount64(atkSq);
+        score[side] += mob * mobilityValue[Piece::king];
+        if (mob == 0)
+            score[side] -= penaltyNoMobility[Piece::king];
+    }
+
+    // ── SPACE ─────────────────────────────────────────────────────────────────
+    for (int side = 0; side < 2; side++) {
+        const uint64_t myPawns = pieceBB[side][Piece::pawn];
+
+        uint64_t spaceMask;
+        if (side == 0) {            // White: forward is +8 => << 8
+            spaceMask = myPawns << 8;
+            spaceMask |= spaceMask << 8;
+            spaceMask |= spaceMask << 16;
+            spaceMask |= spaceMask << 32;
+        }
+        else {                    // Black: forward is -8 => >> 8
+            spaceMask = myPawns >> 8;
+            spaceMask |= spaceMask >> 8;
+            spaceMask |= spaceMask >> 16;
+            spaceMask |= spaceMask >> 32;
+        }
+
+        // central files/ranks mask (your original)
+        spaceMask &= 0x003C3C3C3C3C3C00ULL;
+
+        // strongly recommended: count only empty space
+        spaceMask &= ~occupied;
+
+        // don’t count squares controlled by enemy pawns
+        spaceMask &= ~opPawnAttacks[side];
+
+        score[side] += popcount64(spaceMask) * bonusSpacePerSquare;
+    }
+
+    // ── KING SAFETY ───────────────────────────────────────────────────────────
+    // Finalise attacker danger and structural king-shelter penalties.
+    for (int side = 0; side < 2; side++) {
+        // Danger: attackers outweigh defenders → apply SafetyTable penalty
+        if (nAtk20[side] > 0) {
+            const int danger20 = nAtk20[side] - nDef20[side];
+            if (danger20 > 0)
+                rawKingSafety[side] = SafetyTable[totalAtkUnits[side]] * danger20 / 20;
+        }
+
+        // Pawn shelter around king
+        const int kp = kingPos[side];
+        const int kf = fileKing[side];
+        const int nPawnsSurround = popcount64(getKingAttackSquares(kp) & pieceBB[side][Piece::pawn]);
+
+        const bool missingCenter = !(arrAfterPawn[side][kp] & pieceBB[side][Piece::pawn]);
+        const bool missingRight = (kf < 7) && !(arrAfterPawn[side][kp + 1] & pieceBB[side][Piece::pawn]);
+        const bool missingLeft = (kf > 0) && !(arrAfterPawn[side][kp - 1] & pieceBB[side][Piece::pawn]);
+
+        int nSemiOpen;
+        if (kf == 0) nSemiOpen = missingCenter + missingRight;
+        else if (kf == 7) nSemiOpen = missingCenter + missingLeft;
+        else              nSemiOpen = missingCenter + missingLeft + missingRight;
+
+        score[side] += nPawnsSurround * bonusPawnSurroundKing;
+        score[side] -= semiOpenFilesPenalty[nSemiOpen];
+    }
+
+    // ── PAWN CACHE WRITEBACK ──────────────────────────────────────────────────
+    if (!pawnCacheHit)
+        storePawnHash(pawnHash, pawnScore);
+    score[0] += pawnScore[0];
+    score[1] += pawnScore[1];
+
+    // ── PHASE TAPERING ────────────────────────────────────────────────────────
     phase = (phase * 256 + (TOTAL_PHASE / 2)) / TOTAL_PHASE;
-    if (sumOfWeightDist[0] > 0) {
-        score[0] -= static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[0]) / static_cast<float>(sumOfWeightDist[0]))) * kingPawnTropismFactor;
-    }
-    if (sumOfWeightDist[1] > 0) {
-        score[1] -= static_cast<int>((static_cast<float>(totalWeightedKingDistToOwnPawn[1]) / static_cast<float>(sumOfWeightDist[1]))) * kingPawnTropismFactor;
-    }
-    score[stm] += tempo;
 
-    int strongerSide = score[0] < score[1];
-    int strongerSidePawnMissing = 8 - popcount64(pieceBB[strongerSide][Piece::pawn]);
-    auto scale = (128 - strongerSidePawnMissing * strongerSidePawnMissing) / static_cast<double>(128);
-    int eval = (score[0] - score[1]);
+    score[0] += rawKingSafety[0];
+    score[1] += rawKingSafety[1];
 
-    int ans = (((short)eval * (256 - phase) + ((eval + 0x8000) >> 16) * scale * (phase)) / 256);
+    // ── KING–PAWN TROPISM ─────────────────────────────────────────────────────
+    if (sumOfWeightDist[0] > 0)
+        score[0] -= (totalWeightedKingDistToOwnPawn[0] / sumOfWeightDist[0]) * kingPawnTropismFactor;
+    if (sumOfWeightDist[1] > 0)
+        score[1] -= (totalWeightedKingDistToOwnPawn[1] / sumOfWeightDist[1]) * kingPawnTropismFactor;
+
+    score[(int)stm] += tempo;
+
+    // ── FINAL BLEND (MG/EG taper + pawn scaling) ──────────────────────────────
+    const int strongerSide = (score[0] < score[1]) ? 1 : 0;
+    const int pawnsMissing = 8 - (int)popcount64(pieceBB[strongerSide][Piece::pawn]);
+    const int scaleNum = 128 - pawnsMissing * pawnsMissing;  // /128 denominator
+
+    const int eval = score[0] - score[1];
+    const int mg = (short)eval;
+    const int eg = (eval + 0x8000) >> 16;
+
+    // (mg*(256-phase) + eg*scaleNum*phase/128) / 256
+    int ans = (mg * (256 - phase) + eg * scaleNum * phase / 128) / 256;
+
     if (halve)
         ans >>= 1;
-    //Mop-up eval
-    if (pieceBB[0][Piece::pawn] == 0 && pieceBB[1][Piece::pawn] == 0) {
-        float distBetweenKing = abs(fileKing[0] - fileKing[1]) + abs(rankKing[0] - rankKing[1]);
-        if (ans >= 0) {
-            ans += (4.7f * arrCenterManhattanDistance[kingPos[1]] + 1.6 * (14.0f - distBetweenKing));
-        }
-        else {
-            ans -= (4.7f * arrCenterManhattanDistance[kingPos[0]] + 1.6 * (14.0f - distBetweenKing));
-        }
-    }
-    
-    return ans * who2move * 100;
 
+    // ── MOP-UP EVAL (pawnless endgame) ───────────────────────────────────────
+    // 4.7f → 47/10, 1.6f → 16/10, combined into one integer division
+    if ((pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0) {
+        const int distBetween = abs(fileKing[0] - fileKing[1]) + abs(rankKing[0] - rankKing[1]);
+        if (ans >= 0)
+            ans += (47 * arrCenterManhattanDistance[kingPos[1]] + 16 * (14 - distBetween)) / 10;
+        else
+            ans -= (47 * arrCenterManhattanDistance[kingPos[0]] + 16 * (14 - distBetween)) / 10;
+    }
+
+    return ans * who2move * 100;
 }
