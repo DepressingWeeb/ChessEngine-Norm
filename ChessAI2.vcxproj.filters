@@ -5,47 +5,111 @@
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="Header Files">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
-    </Filter>
     <Filter Include="Resource Files">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="include\constant_bitboard.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="include\constant_eval.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="include\constant_hash.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="include\constant_search.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="include\ttable.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="include\types.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="include\utils.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bitboard.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
+    <Filter Include="Resource Files\Header Files">
+      <UniqueIdentifier>{3a356fbe-efde-42ed-aaa9-fd8249a5d862}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Stockfish">
+      <UniqueIdentifier>{300f2ca6-7066-4e6a-85ba-77e6cc6539af}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Stockfish\src">
+      <UniqueIdentifier>{93c01cd4-804e-4267-af2c-43cc94a3c924}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Stockfish\src\nnue">
+      <UniqueIdentifier>{3c696890-0817-4c96-84f0-f69104ace224}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Stockfish\src\nnue\features">
+      <UniqueIdentifier>{647433a9-1a55-4e72-a2bd-2af20cc49c50}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\bitboard.cpp">
+    <ClCompile Include="src\mybitboard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Stockfish\src\evaluate.cpp">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\nnue\network.cpp">
+      <Filter>Source Files\Stockfish\src\nnue</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\nnue\nnue_accumulator.cpp">
+      <Filter>Source Files\Stockfish\src\nnue</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\nnue\features\half_ka_v2_hm.cpp">
+      <Filter>Source Files\Stockfish\src\nnue\features</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\bitboard.cpp">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\misc.cpp">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\nnue\nnue_misc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Stockfish\src\memory.cpp">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ChessAI.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\chess_types.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\constant_bitboard.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\constant_eval.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\constant_hash.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\constant_search.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\mybitboard.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ttable.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\utils.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\evaluate.h">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\nnue\network.h">
+      <Filter>Source Files\Stockfish\src\nnue</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\nnue\nnue_accumulator.h">
+      <Filter>Source Files\Stockfish\src\nnue</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\nnue\features\half_ka_v2_hm.h">
+      <Filter>Source Files\Stockfish\src\nnue\features</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\bitboard.h">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\misc.h">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClInclude>
+    <ClInclude Include="Stockfish\src\nnue\nnue_architecture.h" />
+    <ClInclude Include="Stockfish\src\nnue\nnue_common.h" />
+    <ClInclude Include="Stockfish\src\nnue\nnue_feature_transformer.h" />
+    <ClInclude Include="Stockfish\src\nnue\nnue_misc.h" />
+    <ClInclude Include="Stockfish\src\nnue\simd.h" />
+    <ClInclude Include="Stockfish\src\memory.h">
+      <Filter>Source Files\Stockfish\src</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
