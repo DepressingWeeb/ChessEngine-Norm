@@ -1,5 +1,5 @@
 #pragma once
-#include "types.h"
+#include "chess_types.h"
 #include "ttable.h"
 #include <vector>
 #include "utils.h"

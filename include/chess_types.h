@@ -5,7 +5,7 @@
 #include <cassert>
 #include <algorithm>
 #include "utils.h"
-const int MAX_PRIORITY = 1e6;
+const int CHESS_MAX_PRIORITY = 1e6;
 enum MoveType {
     NORMAL,
     CAPTURE,

@@ -3,6 +3,14 @@
 #include "constant_bitboard.h"
 #include "constant_hash.h"
 #include <sstream>
+#include "../Stockfish/src/types.h"
+#include "../Stockfish/src/position.h"
+#include "../Stockfish/src/evaluate.h"
+#include "../Stockfish/src/nnue/network.h"
+#include "../Stockfish/src/nnue/nnue_accumulator.h"
+extern Stockfish::Eval::NNUE::Networks* g_nnue_networks;
+extern thread_local Stockfish::Eval::NNUE::AccumulatorCaches* g_nnue_caches;
+thread_local Stockfish::Eval::NNUE::AccumulatorStack g_nnue_acc;
 
 BitBoard::BitBoard() {
     initConstant();
@@ -503,33 +511,33 @@ uint64_t BitBoard::getAllAttackSquares(Side side) {
     uint64_t occ = pieceBB[side][Piece::any] | pieceBB[!side][Piece::any];
     occ ^= pieceBB[!side][Piece::king];
     while (pawnBB) {
-        int pawnPos = BitScanForward64(pawnBB);
+        int pawnPos = my_BitScanForward64(pawnBB);
         uint64_t pawnAttacks = getPawnAttackSquares(side, pawnPos);
         allAttackSquares |= pawnAttacks;
         pawnBB ^= (1ull << pawnPos);
     }
     uint64_t knightBB = pieceBB[side][Piece::knight];
     while (knightBB) {
-        int knightPos = BitScanForward64(knightBB);
+        int knightPos = my_BitScanForward64(knightBB);
         uint64_t knightAttacks = getKnightAttackSquares(knightPos);
         allAttackSquares |= knightAttacks;
         knightBB ^= (1ull << knightPos);
     }
     uint64_t bishopQueenBB = pieceBB[side][Piece::bishop] | pieceBB[side][Piece::queen];
     while (bishopQueenBB) {
-        int bishopPos = BitScanForward64(bishopQueenBB);
+        int bishopPos = my_BitScanForward64(bishopQueenBB);
         uint64_t bishopAttacks = getBishopAttackSquares(occ, bishopPos);
         allAttackSquares |= bishopAttacks;
         bishopQueenBB ^= (1ull << bishopPos);
     }
     uint64_t rookQueenBB = pieceBB[side][Piece::rook] | pieceBB[side][Piece::queen];
     while (rookQueenBB) {
-        int rookPos = BitScanForward64(rookQueenBB);
+        int rookPos = my_BitScanForward64(rookQueenBB);
         uint64_t rookAttacks = getRookAttackSquares(occ, rookPos);
         allAttackSquares |= rookAttacks;
         rookQueenBB ^= (1ull << rookPos);
     }
-    uint64_t kingPos = BitScanForward64(pieceBB[side][Piece::king]);
+    uint64_t kingPos = my_BitScanForward64(pieceBB[side][Piece::king]);
     allAttackSquares |= getKingAttackSquares(kingPos);
 
     return allAttackSquares;
@@ -543,13 +551,13 @@ uint64_t BitBoard::getPinnedPiece(uint64_t occ, int kingPos, Side side) {
     uint64_t pinned = 0;
     uint64_t pinner = getRookXrayAttackSquares(occ, pieceBB[side][Piece::any], kingPos) & opRQ;
     while (pinner) {
-        int sq = BitScanForward64(pinner);
+        int sq = my_BitScanForward64(pinner);
         pinned |= (arrRectangular[sq][kingPos] & pieceBB[side][Piece::any]) ^ (1ull << kingPos);
         pinner &= pinner - 1;
     }
     pinner = getBishopXrayAttackSquares(occ, pieceBB[side][Piece::any], kingPos) & opBQ;
     while (pinner) {
-        int sq = BitScanForward64(pinner);
+        int sq = my_BitScanForward64(pinner);
         pinned |= (arrRectangular[sq][kingPos] & pieceBB[side][Piece::any]) ^ (1ull << kingPos);
         pinner &= pinner - 1;
     }
@@ -568,15 +576,32 @@ uint64_t BitBoard::getSingleCheckInterposingSquares(uint64_t occ, int kingPos, S
     uint64_t bishopsQueens = pieceBB[!side][queen] | pieceBB[!side][Piece::bishop];
     uint64_t maskCheckingPieceBishop = getBishopAttackSquares(occ, kingPos) & bishopsQueens;
     if (maskCheckingPieceBishop) {
-        int checkingPieceIndex = BitScanForward64(maskCheckingPieceBishop);
+        int checkingPieceIndex = my_BitScanForward64(maskCheckingPieceBishop);
         return arrRectangular[kingPos][checkingPieceIndex];
     }
     uint64_t rooksQueens = pieceBB[!side][Piece::queen] | pieceBB[!side][Piece::rook];
     uint64_t maskCheckingPieceRook = getRookAttackSquares(occ, kingPos) & rooksQueens;
     if (maskCheckingPieceRook) {
-        int checkingPieceIndex = BitScanForward64(maskCheckingPieceRook);
+        int checkingPieceIndex = my_BitScanForward64(maskCheckingPieceRook);
         return arrRectangular[kingPos][checkingPieceIndex];
     }
+    return 0;
+}
+
+
+Stockfish::Piece mapPiece(Side side, Piece piece) {
+    Stockfish::Color c = side == Side::White ? Stockfish::WHITE : Stockfish::BLACK;
+    Stockfish::PieceType pt;
+    switch(piece) {
+        case Piece::pawn: pt = Stockfish::PAWN; break;
+        case Piece::knight: pt = Stockfish::KNIGHT; break;
+        case Piece::bishop: pt = Stockfish::BISHOP; break;
+        case Piece::rook: pt = Stockfish::ROOK; break;
+        case Piece::queen: pt = Stockfish::QUEEN; break;
+        case Piece::king: pt = Stockfish::KING; break;
+        default: return Stockfish::NO_PIECE;
+    }
+    return Stockfish::make_piece(c, pt);
 }
 
 uint64_t BitBoard::move(Move& move, uint64_t zHash) {
@@ -602,6 +627,45 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
     MoveType moveType = move.getMoveType();
     int startPos = move.getStartPos();
     int endPos = move.getEndPos();
+
+    if (g_nnue_networks) {
+        
+        Stockfish::DirtyPiece dp;
+
+        dp.pc = mapPiece(sideToMove, movePiece);
+        dp.from = static_cast<Stockfish::Square>(startPos);
+        dp.to = static_cast<Stockfish::Square>(endPos);
+        dp.remove_sq = Stockfish::SQ_NONE;
+        dp.add_sq = Stockfish::SQ_NONE;
+        
+        if (moveType == MoveType::CAPTURE) {
+            dp.remove_sq = static_cast<Stockfish::Square>(endPos);
+            dp.remove_pc = mapPiece(sideToMove == Side::White ? Side::Black : Side::White, capturePiece);
+        } else if (moveType == MoveType::EN_PASSANT) {
+            dp.remove_sq = static_cast<Stockfish::Square>(sideToMove == Side::White ? endPos - 8 : endPos + 8);
+            dp.remove_pc = mapPiece(sideToMove == Side::White ? Side::Black : Side::White, capturePiece);
+        } else if (moveType == MoveType::CASTLE_KINGSIDE || moveType == MoveType::CASTLE_QUEENSIDE) {
+            dp.remove_sq = static_cast<Stockfish::Square>(moveType == MoveType::CASTLE_KINGSIDE ? (sideToMove == Side::White ? 7 : 63) : (sideToMove == Side::White ? 0 : 56));
+            dp.remove_pc = mapPiece(sideToMove, Piece::rook);
+            dp.add_sq = static_cast<Stockfish::Square>(moveType == MoveType::CASTLE_KINGSIDE ? (sideToMove == Side::White ? 5 : 61) : (sideToMove == Side::White ? 3 : 59));
+            dp.add_pc = mapPiece(sideToMove, Piece::rook);
+        } else if (moveType >= MoveType::PROMOTION_BISHOP) {
+            dp.to = Stockfish::SQ_NONE;
+            dp.add_sq = static_cast<Stockfish::Square>(endPos);
+            Piece promPiece;
+            if (moveType == MoveType::PROMOTION_QUEEN || moveType == MoveType::PROMOTION_QUEEN_AND_CAPTURE) promPiece = Piece::queen;
+            else if (moveType == MoveType::PROMOTION_ROOK || moveType == MoveType::PROMOTION_ROOK_AND_CAPTURE) promPiece = Piece::rook;
+            else if (moveType == MoveType::PROMOTION_BISHOP || moveType == MoveType::PROMOTION_BISHOP_AND_CAPTURE) promPiece = Piece::bishop;
+            else promPiece = Piece::knight;
+            dp.add_pc = mapPiece(sideToMove, promPiece);
+            if (moveType == MoveType::PROMOTION_QUEEN_AND_CAPTURE || moveType == MoveType::PROMOTION_ROOK_AND_CAPTURE || moveType == MoveType::PROMOTION_BISHOP_AND_CAPTURE || moveType == MoveType::PROMOTION_KNIGHT_AND_CAPTURE) {
+                dp.remove_sq = static_cast<Stockfish::Square>(endPos);
+                dp.remove_pc = mapPiece(sideToMove == Side::White ? Side::Black : Side::White, capturePiece);
+            }
+        }
+        g_nnue_acc.push(dp);
+    }
+
     move.setCastleRightBefore(castingRight[sideToMove][0], castingRight[sideToMove][1]);
     move.setEnpassantPosBefore(enPassantPos);
     if (enPassantPos != 0) {
@@ -814,6 +878,10 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
 }
 
 void BitBoard::undoMove(Move& move) {
+    if (!move.isNullMove() && g_nnue_networks) {
+        g_nnue_acc.pop();
+    }
+
     moveNum--;
     assert(moveNum >= 0);
     Side sideToMove = move.getSideToMove();
@@ -831,6 +899,7 @@ void BitBoard::undoMove(Move& move) {
     MoveType moveType = move.getMoveType();
     int startPos = move.getStartPos();
     int endPos = move.getEndPos();
+
     castingRight[sideToMove][0] = move.getCastleRightBefore(0);
     castingRight[sideToMove][1] = move.getCastleRightBefore(1);
     enPassantPos = move.getEnpassantPosBefore();
@@ -988,7 +1057,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
     Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
 
-    int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
+    int kingPos = my_BitScanForward64(pieceBB[sideToMove][Piece::king]);
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
 
     int checks = isSquareAttacked(occupied, kingPos, opSide);
@@ -1001,7 +1070,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
         while (pawnBB) {
-            int pawnPos = BitScanForward64(pawnBB);
+            int pawnPos = my_BitScanForward64(pawnBB);
             bool isPinned = (1ull << pawnPos) & pinnedPiece;
             bool isPromotion = (1ull << pawnPos) & mask7thRank;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1011,7 +1080,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t pawnCaptures = getPawnAttackSquares(sideToMove, pawnPos) & pieceBB[opSide][Piece::any] & maskDirectionPin;
             bool isStartingRank = sideToMove == Side::White ? (pawnPos >= 8 && pawnPos <= 15) : (pawnPos >= 48 && pawnPos <= 55);
             while (pawnCaptures) {
-                int capturePos = BitScanForward64(pawnCaptures);
+                int capturePos = my_BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -1047,7 +1116,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         if (enPassantPos != 0) {
             uint64_t enPassantMask = arrPawnAttacks[opSide][enPassantPos] & pieceBB[sideToMove][Piece::pawn];
             while (enPassantMask) {
-                int pawnPos = BitScanForward64(enPassantMask);
+                int pawnPos = my_BitScanForward64(enPassantMask);
                 Move pseudoLegal = Move(pawnPos, enPassantPos, MoveType::EN_PASSANT, sideToMove, Piece::pawn, Piece::pawn);
                 move(pseudoLegal);
                 if (!(getAllAttackSquares(opSide) & (1ull << kingPos))) {
@@ -1061,7 +1130,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
 
         uint64_t knightBB = pieceBB[sideToMove][Piece::knight];
         while (knightBB) {
-            int knightPos = BitScanForward64(knightBB);
+            int knightPos = my_BitScanForward64(knightBB);
             bool isPinned = (1ull << knightPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1072,7 +1141,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t knightCaptures = knightAttacks & pieceBB[opSide][Piece::any];
             uint64_t knightNormalMoves = knightAttacks ^ knightCaptures;
             while (knightCaptures) {
-                int capturePos = BitScanForward64(knightCaptures);
+                int capturePos = my_BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 if (!isPinned)
                     ans.emplace_back(Move(knightPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::knight, capturePiece));
@@ -1080,7 +1149,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             }
 
             while (knightNormalMoves) {
-                int movePos = BitScanForward64(knightNormalMoves);
+                int movePos = my_BitScanForward64(knightNormalMoves);
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
             }
@@ -1089,7 +1158,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
 
         uint64_t bishopBB = pieceBB[sideToMove][Piece::bishop] | pieceBB[sideToMove][Piece::queen];
         while (bishopBB) {
-            int bishopPos = BitScanForward64(bishopBB);
+            int bishopPos = my_BitScanForward64(bishopBB);
             Piece movePiece = pieceTable[bishopPos];
             bool isPinned = (1ull << bishopPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1100,14 +1169,14 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t bishopCaptures = bishopAttacks & pieceBB[opSide][Piece::any];
             uint64_t bishopNormalMoves = bishopAttacks ^ bishopCaptures;
             while (bishopCaptures) {
-                int capturePos = BitScanForward64(bishopCaptures);
+                int capturePos = my_BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
 
             while (bishopNormalMoves) {
-                int movePos = BitScanForward64(bishopNormalMoves);
+                int movePos = my_BitScanForward64(bishopNormalMoves);
                 bishopNormalMoves ^= (1ull << movePos);
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
@@ -1116,7 +1185,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         }
         uint64_t rookBB = pieceBB[sideToMove][Piece::rook] | pieceBB[sideToMove][Piece::queen];
         while (rookBB) {
-            int rookPos = BitScanForward64(rookBB);
+            int rookPos = my_BitScanForward64(rookBB);
             Piece movePiece = pieceTable[rookPos];
             bool isPinned = (1ull << rookPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1127,14 +1196,14 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t rookCaptures = rookAttacks & pieceBB[opSide][Piece::any];
             uint64_t rookNormalMoves = rookAttacks ^ rookCaptures;
             while (rookCaptures) {
-                int capturePos = BitScanForward64(rookCaptures);
+                int capturePos = my_BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
 
             while (rookNormalMoves) {
-                int movePos = BitScanForward64(rookNormalMoves);
+                int movePos = my_BitScanForward64(rookNormalMoves);
                 rookNormalMoves ^= (1ull << movePos);
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
@@ -1147,7 +1216,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             uint64_t kingNormalMoves = kingAttacks ^ kingCaptures;
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -1155,7 +1224,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             }
 
             while (kingNormalMoves) {
-                int movePos = BitScanForward64(kingNormalMoves);
+                int movePos = my_BitScanForward64(kingNormalMoves);
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
             }
@@ -1183,7 +1252,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
         while (pawnBB) {
-            int pawnPos = BitScanForward64(pawnBB);
+            int pawnPos = my_BitScanForward64(pawnBB);
             bool isPinned = (1ull << pawnPos) & pinnedPiece;
             bool isPromotion = (1ull << pawnPos) & mask7thRank;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1193,7 +1262,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t pawnCaptures = getPawnAttackSquares(sideToMove, pawnPos) & pieceBB[opSide][Piece::any] & maskDirectionPin & interposingSquares;
             bool isStartingRank = sideToMove == Side::White ? (pawnPos >= 8 && pawnPos <= 15) : (pawnPos >= 48 && pawnPos <= 55);
             while (pawnCaptures) {
-                int capturePos = BitScanForward64(pawnCaptures);
+                int capturePos = my_BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -1231,7 +1300,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         if (enPassantPos != 0) {
             uint64_t enPassantMask = arrPawnAttacks[opSide][enPassantPos] & pieceBB[sideToMove][Piece::pawn];
             while (enPassantMask) {
-                int pawnPos = BitScanForward64(enPassantMask);
+                int pawnPos = my_BitScanForward64(enPassantMask);
                 Move pseudoLegal = Move(pawnPos, enPassantPos, MoveType::EN_PASSANT, sideToMove, Piece::pawn, Piece::pawn);
                 move(pseudoLegal);
                 if (!(getAllAttackSquares(opSide) & (1ull << kingPos))) {
@@ -1245,7 +1314,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
 
         uint64_t knightBB = pieceBB[sideToMove][Piece::knight];
         while (knightBB) {
-            int knightPos = BitScanForward64(knightBB);
+            int knightPos = my_BitScanForward64(knightBB);
             bool isPinned = (1ull << knightPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1256,7 +1325,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t knightCaptures = knightAttacks & pieceBB[opSide][Piece::any];
             uint64_t knightNormalMoves = knightAttacks ^ knightCaptures;
             while (knightCaptures) {
-                int capturePos = BitScanForward64(knightCaptures);
+                int capturePos = my_BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 if (!isPinned)
@@ -1265,7 +1334,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             }
 
             while (knightNormalMoves) {
-                int movePos = BitScanForward64(knightNormalMoves);
+                int movePos = my_BitScanForward64(knightNormalMoves);
 
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
@@ -1275,7 +1344,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
 
         uint64_t bishopBB = pieceBB[sideToMove][Piece::bishop];
         while (bishopBB) {
-            int bishopPos = BitScanForward64(bishopBB);
+            int bishopPos = my_BitScanForward64(bishopBB);
             bool isPinned = (1ull << bishopPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1285,14 +1354,14 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t bishopCaptures = bishopAttacks & pieceBB[opSide][Piece::any];
             uint64_t bishopNormalMoves = bishopAttacks ^ bishopCaptures;
             while (bishopCaptures) {
-                int capturePos = BitScanForward64(bishopCaptures);
+                int capturePos = my_BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
 
             while (bishopNormalMoves) {
-                int movePos = BitScanForward64(bishopNormalMoves);
+                int movePos = my_BitScanForward64(bishopNormalMoves);
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, Piece::bishop));
                 bishopNormalMoves ^= (1ull << movePos);
             }
@@ -1300,7 +1369,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         }
         uint64_t rookBB = pieceBB[sideToMove][Piece::rook];
         while (rookBB) {
-            int rookPos = BitScanForward64(rookBB);
+            int rookPos = my_BitScanForward64(rookBB);
             bool isPinned = (1ull << rookPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1310,13 +1379,13 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t rookCaptures = rookAttacks & pieceBB[opSide][Piece::any];
             uint64_t rookNormalMoves = rookAttacks ^ rookCaptures;
             while (rookCaptures) {
-                int capturePos = BitScanForward64(rookCaptures);
+                int capturePos = my_BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
             while (rookNormalMoves) {
-                int movePos = BitScanForward64(rookNormalMoves);
+                int movePos = my_BitScanForward64(rookNormalMoves);
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, Piece::rook));
                 rookNormalMoves ^= (1ull << movePos);
             }
@@ -1324,7 +1393,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
         }
         uint64_t queenBB = pieceBB[sideToMove][Piece::queen];
         while (queenBB) {
-            int queenPos = BitScanForward64(queenBB);
+            int queenPos = my_BitScanForward64(queenBB);
             bool isPinned = (1ull << queenPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1334,14 +1403,14 @@ std::vector<Move> BitBoard::getLegalMoves() {
             uint64_t queenCaptures = queenAttacks & pieceBB[opSide][Piece::any];
             uint64_t queenNormalMoves = queenAttacks ^ queenCaptures;
             while (queenCaptures) {
-                int capturePos = BitScanForward64(queenCaptures);
+                int capturePos = my_BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
             }
 
             while (queenNormalMoves) {
-                int movePos = BitScanForward64(queenNormalMoves);
+                int movePos = my_BitScanForward64(queenNormalMoves);
                 ans.emplace_back(Move(queenPos, movePos, MoveType::NORMAL, sideToMove, Piece::queen));
                 queenNormalMoves ^= (1ull << movePos);
             }
@@ -1349,12 +1418,12 @@ std::vector<Move> BitBoard::getLegalMoves() {
         }
         uint64_t kingBB = pieceBB[sideToMove][Piece::king];
         while (kingBB) {
-            int kingPos = BitScanForward64(kingBB);
+            int kingPos = my_BitScanForward64(kingBB);
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             uint64_t kingNormalMoves = kingAttacks ^ kingCaptures;
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -1362,7 +1431,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             }
 
             while (kingNormalMoves) {
-                int movePos = BitScanForward64(kingNormalMoves);
+                int movePos = my_BitScanForward64(kingNormalMoves);
 
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
@@ -1376,12 +1445,12 @@ std::vector<Move> BitBoard::getLegalMoves() {
     else {
         uint64_t kingBB = pieceBB[sideToMove][Piece::king];
         while (kingBB) {
-            int kingPos = BitScanForward64(kingBB);
+            int kingPos = my_BitScanForward64(kingBB);
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             uint64_t kingNormalMoves = kingAttacks ^ kingCaptures;
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -1389,7 +1458,7 @@ std::vector<Move> BitBoard::getLegalMoves() {
             }
 
             while (kingNormalMoves) {
-                int movePos = BitScanForward64(kingNormalMoves);
+                int movePos = my_BitScanForward64(kingNormalMoves);
 
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
@@ -1408,7 +1477,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
     Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
 
-    int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
+    int kingPos = my_BitScanForward64(pieceBB[sideToMove][Piece::king]);
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
 
     int checks = isSquareAttacked(occupied, kingPos, opSide);
@@ -1419,7 +1488,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
         while (pawnBB) {
-            int pawnPos = BitScanForward64(pawnBB);
+            int pawnPos = my_BitScanForward64(pawnBB);
             bool isPinned = (1ull << pawnPos) & pinnedPiece;
             bool isPromotion = (1ull << pawnPos) & mask7thRank;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1429,7 +1498,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t pawnCaptures = getPawnAttackSquares(sideToMove, pawnPos) & pieceBB[opSide][Piece::any] & maskDirectionPin;
             bool isStartingRank = sideToMove == Side::White ? (pawnPos >= 8 && pawnPos <= 15) : (pawnPos >= 48 && pawnPos <= 55);
             while (pawnCaptures) {
-                int capturePos = BitScanForward64(pawnCaptures);
+                int capturePos = my_BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
 
@@ -1468,7 +1537,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         if (enPassantPos != 0) {
             uint64_t enPassantMask = arrPawnAttacks[opSide][enPassantPos] & pieceBB[sideToMove][Piece::pawn];
             while (enPassantMask) {
-                int pawnPos = BitScanForward64(enPassantMask);
+                int pawnPos = my_BitScanForward64(enPassantMask);
                 Move pseudoLegal = Move(pawnPos, enPassantPos, MoveType::EN_PASSANT, sideToMove, Piece::pawn, Piece::pawn);
                 move(pseudoLegal);
                 if (!(getAllAttackSquares(opSide) & (1ull << kingPos))) {
@@ -1482,7 +1551,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
 
         uint64_t knightBB = pieceBB[sideToMove][Piece::knight];
         while (knightBB) {
-            int knightPos = BitScanForward64(knightBB);
+            int knightPos = my_BitScanForward64(knightBB);
             bool isPinned = (1ull << knightPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1493,7 +1562,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t knightCaptures = knightAttacks & pieceBB[opSide][Piece::any];
             uint64_t knightNormalMoves = knightAttacks ^ knightCaptures;
             while (knightCaptures) {
-                int capturePos = BitScanForward64(knightCaptures);
+                int capturePos = my_BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 if (!isPinned)
@@ -1502,7 +1571,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             }
 
             while (knightNormalMoves) {
-                int movePos = BitScanForward64(knightNormalMoves);
+                int movePos = my_BitScanForward64(knightNormalMoves);
 
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
@@ -1512,7 +1581,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
 
         uint64_t bishopBB = pieceBB[sideToMove][Piece::bishop] | pieceBB[sideToMove][Piece::queen];
         while (bishopBB) {
-            int bishopPos = BitScanForward64(bishopBB);
+            int bishopPos = my_BitScanForward64(bishopBB);
             Piece movePiece = pieceTable[bishopPos];
             bool isPinned = (1ull << bishopPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1523,14 +1592,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t bishopCaptures = bishopAttacks & pieceBB[opSide][Piece::any];
             uint64_t bishopNormalMoves = bishopAttacks ^ bishopCaptures;
             while (bishopCaptures) {
-                int capturePos = BitScanForward64(bishopCaptures);
+                int capturePos = my_BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
 
             while (bishopNormalMoves) {
-                int movePos = BitScanForward64(bishopNormalMoves);
+                int movePos = my_BitScanForward64(bishopNormalMoves);
                 bishopNormalMoves ^= (1ull << movePos);
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
@@ -1539,7 +1608,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         }
         uint64_t rookBB = pieceBB[sideToMove][Piece::rook] | pieceBB[sideToMove][Piece::queen];
         while (rookBB) {
-            int rookPos = BitScanForward64(rookBB);
+            int rookPos = my_BitScanForward64(rookBB);
             Piece movePiece = pieceTable[rookPos];
             bool isPinned = (1ull << rookPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1550,14 +1619,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t rookCaptures = rookAttacks & pieceBB[opSide][Piece::any];
             uint64_t rookNormalMoves = rookAttacks ^ rookCaptures;
             while (rookCaptures) {
-                int capturePos = BitScanForward64(rookCaptures);
+                int capturePos = my_BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, movePiece, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
 
             while (rookNormalMoves) {
-                int movePos = BitScanForward64(rookNormalMoves);
+                int movePos = my_BitScanForward64(rookNormalMoves);
                 rookNormalMoves ^= (1ull << movePos);
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, movePiece));
 
@@ -1570,7 +1639,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             uint64_t kingNormalMoves = kingAttacks ^ kingCaptures;
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -1578,7 +1647,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             }
 
             while (kingNormalMoves) {
-                int movePos = BitScanForward64(kingNormalMoves);
+                int movePos = my_BitScanForward64(kingNormalMoves);
 
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
@@ -1607,7 +1676,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         uint64_t pawnBB = pieceBB[sideToMove][Piece::pawn];
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
         while (pawnBB) {
-            int pawnPos = BitScanForward64(pawnBB);
+            int pawnPos = my_BitScanForward64(pawnBB);
             bool isPinned = (1ull << pawnPos) & pinnedPiece;
             bool isPromotion = (1ull << pawnPos) & mask7thRank;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1617,7 +1686,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t pawnCaptures = getPawnAttackSquares(sideToMove, pawnPos) & pieceBB[opSide][Piece::any] & maskDirectionPin & interposingSquares;
             bool isStartingRank = sideToMove == Side::White ? (pawnPos >= 8 && pawnPos <= 15) : (pawnPos >= 48 && pawnPos <= 55);
             while (pawnCaptures) {
-                int capturePos = BitScanForward64(pawnCaptures);
+                int capturePos = my_BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -1655,7 +1724,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         if (enPassantPos != 0) {
             uint64_t enPassantMask = arrPawnAttacks[opSide][enPassantPos] & pieceBB[sideToMove][Piece::pawn];
             while (enPassantMask) {
-                int pawnPos = BitScanForward64(enPassantMask);
+                int pawnPos = my_BitScanForward64(enPassantMask);
                 Move pseudoLegal = Move(pawnPos, enPassantPos, MoveType::EN_PASSANT, sideToMove, Piece::pawn, Piece::pawn);
                 move(pseudoLegal);
                 if (!(getAllAttackSquares(opSide) & (1ull << kingPos))) {
@@ -1669,7 +1738,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
 
         uint64_t knightBB = pieceBB[sideToMove][Piece::knight];
         while (knightBB) {
-            int knightPos = BitScanForward64(knightBB);
+            int knightPos = my_BitScanForward64(knightBB);
             bool isPinned = (1ull << knightPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1680,7 +1749,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t knightCaptures = knightAttacks & pieceBB[opSide][Piece::any];
             uint64_t knightNormalMoves = knightAttacks ^ knightCaptures;
             while (knightCaptures) {
-                int capturePos = BitScanForward64(knightCaptures);
+                int capturePos = my_BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 if (!isPinned)
@@ -1689,7 +1758,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             }
 
             while (knightNormalMoves) {
-                int movePos = BitScanForward64(knightNormalMoves);
+                int movePos = my_BitScanForward64(knightNormalMoves);
 
                 ans.emplace_back(Move(knightPos, movePos, MoveType::NORMAL, sideToMove, Piece::knight));
                 knightNormalMoves ^= (1ull << movePos);
@@ -1699,7 +1768,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
 
         uint64_t bishopBB = pieceBB[sideToMove][Piece::bishop];
         while (bishopBB) {
-            int bishopPos = BitScanForward64(bishopBB);
+            int bishopPos = my_BitScanForward64(bishopBB);
             bool isPinned = (1ull << bishopPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1709,14 +1778,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t bishopCaptures = bishopAttacks & pieceBB[opSide][Piece::any];
             uint64_t bishopNormalMoves = bishopAttacks ^ bishopCaptures;
             while (bishopCaptures) {
-                int capturePos = BitScanForward64(bishopCaptures);
+                int capturePos = my_BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
             }
 
             while (bishopNormalMoves) {
-                int movePos = BitScanForward64(bishopNormalMoves);
+                int movePos = my_BitScanForward64(bishopNormalMoves);
                 ans.emplace_back(Move(bishopPos, movePos, MoveType::NORMAL, sideToMove, Piece::bishop));
                 bishopNormalMoves ^= (1ull << movePos);
             }
@@ -1724,7 +1793,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         }
         uint64_t rookBB = pieceBB[sideToMove][Piece::rook];
         while (rookBB) {
-            int rookPos = BitScanForward64(rookBB);
+            int rookPos = my_BitScanForward64(rookBB);
             bool isPinned = (1ull << rookPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1734,14 +1803,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t rookCaptures = rookAttacks & pieceBB[opSide][Piece::any];
             uint64_t rookNormalMoves = rookAttacks ^ rookCaptures;
             while (rookCaptures) {
-                int capturePos = BitScanForward64(rookCaptures);
+                int capturePos = my_BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
             }
 
             while (rookNormalMoves) {
-                int movePos = BitScanForward64(rookNormalMoves);
+                int movePos = my_BitScanForward64(rookNormalMoves);
                 ans.emplace_back(Move(rookPos, movePos, MoveType::NORMAL, sideToMove, Piece::rook));
                 rookNormalMoves ^= (1ull << movePos);
             }
@@ -1749,7 +1818,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         }
         uint64_t queenBB = pieceBB[sideToMove][Piece::queen];
         while (queenBB) {
-            int queenPos = BitScanForward64(queenBB);
+            int queenPos = my_BitScanForward64(queenBB);
             bool isPinned = (1ull << queenPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1759,14 +1828,14 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             uint64_t queenCaptures = queenAttacks & pieceBB[opSide][Piece::any];
             uint64_t queenNormalMoves = queenAttacks ^ queenCaptures;
             while (queenCaptures) {
-                int capturePos = BitScanForward64(queenCaptures);
+                int capturePos = my_BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
             }
 
             while (queenNormalMoves) {
-                int movePos = BitScanForward64(queenNormalMoves);
+                int movePos = my_BitScanForward64(queenNormalMoves);
                 ans.emplace_back(Move(queenPos, movePos, MoveType::NORMAL, sideToMove, Piece::queen));
                 queenNormalMoves ^= (1ull << movePos);
             }
@@ -1774,12 +1843,12 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
         }
         uint64_t kingBB = pieceBB[sideToMove][Piece::king];
         while (kingBB) {
-            int kingPos = BitScanForward64(kingBB);
+            int kingPos = my_BitScanForward64(kingBB);
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             uint64_t kingNormalMoves = kingAttacks ^ kingCaptures;
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -1787,7 +1856,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             }
 
             while (kingNormalMoves) {
-                int movePos = BitScanForward64(kingNormalMoves);
+                int movePos = my_BitScanForward64(kingNormalMoves);
 
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
@@ -1801,12 +1870,12 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
     else {
         uint64_t kingBB = pieceBB[sideToMove][Piece::king];
         while (kingBB) {
-            int kingPos = BitScanForward64(kingBB);
+            int kingPos = my_BitScanForward64(kingBB);
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             uint64_t kingNormalMoves = kingAttacks ^ kingCaptures;
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -1814,7 +1883,7 @@ void BitBoard::getLegalMovesAlt(MoveVector& ans) {
             }
 
             while (kingNormalMoves) {
-                int movePos = BitScanForward64(kingNormalMoves);
+                int movePos = my_BitScanForward64(kingNormalMoves);
 
                 ans.emplace_back(Move(kingPos, movePos, MoveType::NORMAL, sideToMove, Piece::king));
                 kingNormalMoves ^= (1ull << movePos);
@@ -1829,7 +1898,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
     Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
 
-    int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
+    int kingPos = my_BitScanForward64(pieceBB[sideToMove][Piece::king]);
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
 
     int checks = isSquareAttacked(occupied, kingPos, opSide);
@@ -1841,7 +1910,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
         int moveOffset = sideToMove == Side::White ? 8 : -8;
         while (pawnBB) {
-            int pawnPos = BitScanForward64(pawnBB);
+            int pawnPos = my_BitScanForward64(pawnBB);
             bool isPinned = (1ull << pawnPos) & pinnedPiece;
             bool isPromotion = (1ull << pawnPos) & mask7thRank;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -1851,7 +1920,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t pawnCaptures = getPawnAttackSquares(sideToMove, pawnPos) & pieceBB[opSide][Piece::any] & maskDirectionPin;
             bool isStartingRank = sideToMove == Side::White ? (pawnPos >= 8 && pawnPos <= 15) : (pawnPos >= 48 && pawnPos <= 55);
             while (pawnCaptures) {
-                int capturePos = BitScanForward64(pawnCaptures);
+                int capturePos = my_BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
 
@@ -1883,7 +1952,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         if (enPassantPos != 0) {
             uint64_t enPassantMask = arrPawnAttacks[opSide][enPassantPos] & pieceBB[sideToMove][Piece::pawn];
             while (enPassantMask) {
-                int pawnPos = BitScanForward64(enPassantMask);
+                int pawnPos = my_BitScanForward64(enPassantMask);
                 Move pseudoLegal = Move(pawnPos, enPassantPos, MoveType::EN_PASSANT, sideToMove, Piece::pawn, Piece::pawn);
                 move(pseudoLegal);
                 if (!(getAllAttackSquares(opSide) & (1ull << kingPos))) {
@@ -1897,7 +1966,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
 
         uint64_t knightBB = pieceBB[sideToMove][Piece::knight];
         while (knightBB) {
-            int knightPos = BitScanForward64(knightBB);
+            int knightPos = my_BitScanForward64(knightBB);
             bool isPinned = (1ull << knightPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1907,7 +1976,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t knightAttacks = getKnightAttackSquares(knightPos) & ~pieceBB[sideToMove][Piece::any];
             uint64_t knightCaptures = knightAttacks & pieceBB[opSide][Piece::any];
             while (knightCaptures) {
-                int capturePos = BitScanForward64(knightCaptures);
+                int capturePos = my_BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 if (!isPinned)
@@ -1919,7 +1988,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
 
         uint64_t bishopBB = pieceBB[sideToMove][Piece::bishop];
         while (bishopBB) {
-            int bishopPos = BitScanForward64(bishopBB);
+            int bishopPos = my_BitScanForward64(bishopBB);
             bool isPinned = (1ull << bishopPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1928,7 +1997,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t bishopAttacks = getBishopAttackSquares(occupied, bishopPos) & ~pieceBB[sideToMove][Piece::any] & maskDirectionPin;
             uint64_t bishopCaptures = bishopAttacks & pieceBB[opSide][Piece::any];
             while (bishopCaptures) {
-                int capturePos = BitScanForward64(bishopCaptures);
+                int capturePos = my_BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
@@ -1937,7 +2006,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         }
         uint64_t rookBB = pieceBB[sideToMove][Piece::rook];
         while (rookBB) {
-            int rookPos = BitScanForward64(rookBB);
+            int rookPos = my_BitScanForward64(rookBB);
             bool isPinned = (1ull << rookPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1946,7 +2015,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t rookAttacks = getRookAttackSquares(occupied, rookPos) & ~pieceBB[sideToMove][Piece::any] & maskDirectionPin;
             uint64_t rookCaptures = rookAttacks & pieceBB[opSide][Piece::any];
             while (rookCaptures) {
-                int capturePos = BitScanForward64(rookCaptures);
+                int capturePos = my_BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
@@ -1955,7 +2024,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         }
         uint64_t queenBB = pieceBB[sideToMove][Piece::queen];
         while (queenBB) {
-            int queenPos = BitScanForward64(queenBB);
+            int queenPos = my_BitScanForward64(queenBB);
             bool isPinned = (1ull << queenPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -1964,7 +2033,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t queenAttacks = (getBishopAttackSquares(occupied, queenPos) | getRookAttackSquares(occupied, queenPos)) & ~pieceBB[sideToMove][Piece::any] & maskDirectionPin;
             uint64_t queenCaptures = queenAttacks & pieceBB[opSide][Piece::any];
             while (queenCaptures) {
-                int capturePos = BitScanForward64(queenCaptures);
+                int capturePos = my_BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
@@ -1976,7 +2045,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
                 kingCaptures ^= (1ull << capturePos);
@@ -1993,7 +2062,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         uint64_t mask7thRank = sideToMove == Side::White ? 0x00ff000000000000 : 0x000000000000ff00;
         int moveOffset = sideToMove == Side::White ? 8 : -8;
         while (pawnBB) {
-            int pawnPos = BitScanForward64(pawnBB);
+            int pawnPos = my_BitScanForward64(pawnBB);
             bool isPinned = (1ull << pawnPos) & pinnedPiece;
             bool isPromotion = (1ull << pawnPos) & mask7thRank;
             uint64_t maskDirectionPin = UINT64_MAX;
@@ -2003,7 +2072,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t pawnCaptures = getPawnAttackSquares(sideToMove, pawnPos) & pieceBB[opSide][Piece::any] & maskDirectionPin & interposingSquares;
             bool isStartingRank = sideToMove == Side::White ? (pawnPos >= 8 && pawnPos <= 15) : (pawnPos >= 48 && pawnPos <= 55);
             while (pawnCaptures) {
-                int capturePos = BitScanForward64(pawnCaptures);
+                int capturePos = my_BitScanForward64(pawnCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 if (isPromotion) {
                     ans.emplace_back(Move(pawnPos, capturePos, MoveType::PROMOTION_QUEEN_AND_CAPTURE, sideToMove, Piece::pawn, capturePiece));
@@ -2033,7 +2102,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         if (enPassantPos != 0) {
             uint64_t enPassantMask = arrPawnAttacks[opSide][enPassantPos] & pieceBB[sideToMove][Piece::pawn];
             while (enPassantMask) {
-                int pawnPos = BitScanForward64(enPassantMask);
+                int pawnPos = my_BitScanForward64(enPassantMask);
                 Move pseudoLegal = Move(pawnPos, enPassantPos, MoveType::EN_PASSANT, sideToMove, Piece::pawn, Piece::pawn);
                 move(pseudoLegal);
                 if (!(getAllAttackSquares(opSide) & (1ull << kingPos))) {
@@ -2047,7 +2116,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
 
         uint64_t knightBB = pieceBB[sideToMove][Piece::knight];
         while (knightBB) {
-            int knightPos = BitScanForward64(knightBB);
+            int knightPos = my_BitScanForward64(knightBB);
             bool isPinned = (1ull << knightPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -2057,7 +2126,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t knightAttacks = getKnightAttackSquares(knightPos) & ~pieceBB[sideToMove][Piece::any] & interposingSquares;
             uint64_t knightCaptures = knightAttacks & pieceBB[opSide][Piece::any];
             while (knightCaptures) {
-                int capturePos = BitScanForward64(knightCaptures);
+                int capturePos = my_BitScanForward64(knightCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 if (!isPinned)
@@ -2069,7 +2138,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
 
         uint64_t bishopBB = pieceBB[sideToMove][Piece::bishop];
         while (bishopBB) {
-            int bishopPos = BitScanForward64(bishopBB);
+            int bishopPos = my_BitScanForward64(bishopBB);
             bool isPinned = (1ull << bishopPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -2078,7 +2147,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t bishopAttacks = getBishopAttackSquares(occupied, bishopPos) & ~pieceBB[sideToMove][Piece::any] & maskDirectionPin & interposingSquares;
             uint64_t bishopCaptures = bishopAttacks & pieceBB[opSide][Piece::any];
             while (bishopCaptures) {
-                int capturePos = BitScanForward64(bishopCaptures);
+                int capturePos = my_BitScanForward64(bishopCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(bishopPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::bishop, capturePiece));
                 bishopCaptures ^= (1ull << capturePos);
@@ -2087,7 +2156,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         }
         uint64_t rookBB = pieceBB[sideToMove][Piece::rook];
         while (rookBB) {
-            int rookPos = BitScanForward64(rookBB);
+            int rookPos = my_BitScanForward64(rookBB);
             bool isPinned = (1ull << rookPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -2096,7 +2165,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t rookAttacks = getRookAttackSquares(occupied, rookPos) & ~pieceBB[sideToMove][Piece::any] & maskDirectionPin & interposingSquares;
             uint64_t rookCaptures = rookAttacks & pieceBB[opSide][Piece::any];
             while (rookCaptures) {
-                int capturePos = BitScanForward64(rookCaptures);
+                int capturePos = my_BitScanForward64(rookCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(rookPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::rook, capturePiece));
                 rookCaptures ^= (1ull << capturePos);
@@ -2105,7 +2174,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         }
         uint64_t queenBB = pieceBB[sideToMove][Piece::queen];
         while (queenBB) {
-            int queenPos = BitScanForward64(queenBB);
+            int queenPos = my_BitScanForward64(queenBB);
             bool isPinned = (1ull << queenPos) & pinnedPiece;
             uint64_t maskDirectionPin = UINT64_MAX;
             if (isPinned) {
@@ -2114,7 +2183,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
             uint64_t queenAttacks = (getBishopAttackSquares(occupied, queenPos) | getRookAttackSquares(occupied, queenPos)) & ~pieceBB[sideToMove][Piece::any] & maskDirectionPin & interposingSquares;
             uint64_t queenCaptures = queenAttacks & pieceBB[opSide][Piece::any];
             while (queenCaptures) {
-                int capturePos = BitScanForward64(queenCaptures);
+                int capturePos = my_BitScanForward64(queenCaptures);
                 Piece capturePiece = pieceTable[capturePos];
                 ans.emplace_back(Move(queenPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::queen, capturePiece));
                 queenCaptures ^= (1ull << capturePos);
@@ -2123,11 +2192,11 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
         }
         uint64_t kingBB = pieceBB[sideToMove][Piece::king];
         while (kingBB) {
-            int kingPos = BitScanForward64(kingBB);
+            int kingPos = my_BitScanForward64(kingBB);
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -2142,11 +2211,11 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
     else {
         uint64_t kingBB = pieceBB[sideToMove][Piece::king];
         while (kingBB) {
-            int kingPos = BitScanForward64(kingBB);
+            int kingPos = my_BitScanForward64(kingBB);
             uint64_t kingAttacks = getKingAttackSquares(kingPos) & ~(pieceBB[sideToMove][Piece::any]) & (~opAttackSquares);
             uint64_t kingCaptures = kingAttacks & pieceBB[opSide][Piece::any];
             while (kingCaptures) {
-                int capturePos = BitScanForward64(kingCaptures);
+                int capturePos = my_BitScanForward64(kingCaptures);
                 Piece capturePiece = pieceTable[capturePos];
 
                 ans.emplace_back(Move(kingPos, capturePos, MoveType::CAPTURE, sideToMove, Piece::king, capturePiece));
@@ -2159,7 +2228,7 @@ void BitBoard::getLegalCapturesAlt(MoveVector& ans) {
 bool BitBoard::isKingInCheck() {
     Side sideToMove = isWhiteTurn ? Side::White : Side::Black;
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
-    int kingPos = BitScanForward64(pieceBB[sideToMove][Piece::king]);
+    int kingPos = my_BitScanForward64(pieceBB[sideToMove][Piece::king]);
     uint64_t occupied = pieceBB[sideToMove][Piece::any] | pieceBB[!sideToMove][Piece::any];
     return isSquareAttacked(occupied, kingPos, opSide);
 }
@@ -2192,6 +2261,7 @@ bool BitBoard::isValidMove(Move& move) {
     MoveType moveType = move.getMoveType();
     int startPos = move.getStartPos();
     int endPos = move.getEndPos();
+
     uint64_t occ = pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any];
     switch (moveType) {
     case MoveType::NORMAL:
@@ -2263,8 +2333,8 @@ bool BitBoard::SEE_GE(Move m, int threshold) {
     uint64_t attackers = getAttackersOfSq(occupied, to);
     uint64_t stmAttackers, bb;
     int      res = 1;
-    int kingPos[2] = { BitScanForward64(pieceBB[Side::White][Piece::king]),
-                    BitScanForward64(pieceBB[Side::Black][Piece::king])
+    int kingPos[2] = { my_BitScanForward64(pieceBB[Side::White][Piece::king]),
+                    my_BitScanForward64(pieceBB[Side::Black][Piece::king])
     };
 
     uint64_t pawns = pieceBB[Side::White][Piece::pawn] | pieceBB[Side::Black][Piece::pawn];
@@ -2353,7 +2423,7 @@ bool BitBoard::SEE_GE(Move m, int threshold) {
 }
 bool BitBoard::isThreat(const Move& move) {
     const Side     sideToMove = move.getSideToMove();
-    const Side     opSide =  sideToMove == Side::White ? Side::Black : Side::White;
+    const Side     opSide = sideToMove == Side::White ? Side::Black : Side::White;
     const int      startPos = move.getStartPos();
     const int      endPos = move.getEndPos();
     const MoveType mt = move.getMoveType();
@@ -2400,7 +2470,7 @@ bool BitBoard::isThreat(const Move& move) {
     const int myValue = pieceValue[effectivePiece];
     for (int p = Piece::pawn; p <= Piece::queen; p++) {
         if (pieceValue[p] > myValue && (atkSq & pieceBB[opSide][p])) {
-            
+
             return true;
         }
     }
@@ -2459,496 +2529,13 @@ void BitBoard::storePawnHash(uint64_t pawnHash, int score[2]) {
     entry.valid = true;
 }
 int BitBoard::evaluate(int alpha, int beta) {
-    uint64_t occupied = pieceBB[0][Piece::any] | pieceBB[1][Piece::any];
-    const int who2move = isWhiteTurn ? 1 : -1;
-    const int totalOcc = popcount64(occupied);
-
-    int score[2]{ 0 };
-    int phase = TOTAL_PHASE;
-
-    const int kingPos[2] = {
-        BitScanForward64(pieceBB[0][Piece::king]),
-        BitScanForward64(pieceBB[1][Piece::king])
-    };
-    const int rankKing[2] = { posToRank(kingPos[0]), posToRank(kingPos[1]) };
-    const int fileKing[2] = { posToFile(kingPos[0]), posToFile(kingPos[1]) };
-
-    // ── Halve detection ───────────────────────────────────────────────────────
-    bool halve = false;
-    if (totalOcc <= 6
-        && (pieceBB[0][Piece::queen] | pieceBB[1][Piece::queen]) == 0
-        && (pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0)
-    {
-        const int diffMaterial =
-            (popcount64(pieceBB[0][Piece::rook]) - popcount64(pieceBB[1][Piece::rook])) * pieceValue[Piece::rook] +
-            (popcount64(pieceBB[0][Piece::knight]) - popcount64(pieceBB[1][Piece::knight])) * pieceValue[Piece::knight] +
-            (popcount64(pieceBB[0][Piece::bishop]) - popcount64(pieceBB[1][Piece::bishop])) * pieceValue[Piece::bishop];
-        if (abs(diffMaterial) <= 300)
-            halve = true;
-    }
-
-    // ── Pawn hash ─────────────────────────────────────────────────────────────
-    const uint64_t pawnHash = getPawnHash();
-    int pawnScore[2] = { 0, 0 };
-    const bool pawnCacheHit = probePawnHash(pawnHash, pawnScore);
-
-    // ── Shared precomputed masks ──────────────────────────────────────────────
-    const Side stm = isWhiteTurn ? Side::White : Side::Black;
-    const uint64_t pawnSet = pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn];
-
-    const uint64_t allPieces[2] = {
-        pieceBB[0][Piece::any] & ~pieceBB[0][Piece::pawn],
-        pieceBB[1][Piece::any] & ~pieceBB[1][Piece::pawn]
-    };
-    const uint64_t allHeavyPieces[2] = {
-        allPieces[0] & ~(pieceBB[0][Piece::bishop] | pieceBB[0][Piece::knight]),
-        allPieces[1] & ~(pieceBB[1][Piece::bishop] | pieceBB[1][Piece::knight])
-    };
-
-    int rawKingSafety[2] = { 0, 0 };
-    int totalWeightedKingDistToOwnPawn[2] = { 0, 0 };
-    int sumOfWeightDist[2] = { 0, 0 };
-
-    // ── Per-side setup ────────────────────────────────────────────────────────
-    // Precompute everything that is side-invariant within the piece loops below.
-    // Indexed [side]: opponent pawn attacks, king rings, defender counts, etc.
-
-    uint64_t opPawnAttacks[2];
-    uint64_t opPawnSetAtkSq[2];
-    uint64_t opInner[2];       // king inner ring of the opponent
-    uint64_t opOuter[2];       // king outer ring of the opponent
-    int      nDef20[2];        // defender weight around own king, scaled ×20
-    int      nAtk20[2] = { 0, 0 };
-    int      totalAtkUnits[2] = { 0, 0 };
-
-    for (int side = 0; side < 2; side++) {
-        const int op = side ^ 1;
-
-        opInner[side] = getKingAttackSquares(kingPos[op]);
-        opOuter[side] = arrOuterRing[kingPos[op]];
-
-        const uint64_t opPawns = pieceBB[op][Piece::pawn];
-        const uint64_t opNonPawns = pieceBB[op][Piece::any] ^ opPawns;
-
-        // side==0 (White) is attacked by Black (op==1) pawns that push downward
-        opPawnAttacks[side] = (side == 1)
-            ? (((opPawns << 7) & ~0x8080808080808080ULL) | ((opPawns << 9) & ~0x0101010101010101ULL))
-            : (((opPawns >> 7) & ~0x0101010101010101ULL) | ((opPawns >> 9) & ~0x8080808080808080ULL));
-
-        opPawnSetAtkSq[side] = opPawnAttacks[side] & ~allPieces[op];
-
-        // Defenders around the king being attacked, scaled ×20
-        // 0.5 per inner pawn → 10, 0.2 per outer pawn → 4,
-        // 1.0 per inner piece → 20, 0.5 per outer piece → 10
-        nDef20[side] =
-            popcount64(opPawns & opInner[side]) * 10 +
-            popcount64(opPawns & opOuter[side]) * 4 +
-            popcount64(opNonPawns & opInner[side]) * 20 +
-            popcount64(opNonPawns & opOuter[side]) * 10;
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Per-piece-type loops — one tight loop per piece, both sides interleaved
-    // so all shared tables (PST, attack tables) stay hot in L1/L2.
-    // ═════════════════════════════════════════════════════════════════════════
-
-    // ── PAWNS ─────────────────────────────────────────────────────────────────
-    // Tables touched: pawnTable, arrPawnAttacks, arrAfterPawn,
-    //                 arrNeighorPawn, arrFrontPawn, bonusPassedPawnByRank
-    for (int side = 0; side < 2; side++) {
-        const int      op = side ^ 1;
-        const int      flip = (side == 0) ? 56 : 0;
-        const int      pushOff = (side == 0) ? 8 : -8;
-        const bool     isSTM = (side == (int)stm);
-        const uint64_t myBB = pieceBB[side][Piece::pawn];
-
-        score[side] += popcount64(myBB) * materialValue[Piece::pawn];
-
-        uint64_t bb = myBB;
-        while (bb) {
-            const int pos = BitScanForward64(bb);
-            bb &= bb - 1;
-
-            const int rankPawn = posToRank(pos);
-            const int filePawn = posToFile(pos);
-            const bool passed = isPassedPawn(static_cast<Side>(side),
-                static_cast<Side>(op), pos);
-
-            // ── Pawn structure (cached) ──────────────────────────────────────
-            if (!pawnCacheHit) {
-                pawnScore[side] += pawnTable[pos ^ flip];
-
-                if (arrAfterPawn[side][pos] & myBB)
-                    pawnScore[side] -= pawnDoublePenalty;
-
-                const bool isolated = !(arrNeighorPawn[pos] & myBB);
-                if (isolated)
-                    pawnScore[side] -= pawnIsolatedPenalty;
-                const int rankFlip = (side == 1) ? (7 - rankPawn) : rankPawn;
-                uint64_t adjSameRank = 0ULL;
-                if (filePawn > 0) adjSameRank |= (1ULL << (pos - 1));
-                if (filePawn < 7) adjSameRank |= (1ULL << (pos + 1));
-
-                if (myBB & adjSameRank)
-                    pawnScore[side] += phalanxBonus[rankFlip];
-                if (passed) {
-                    
-                    pawnScore[side] += bonusPassedPawnByRank[rankFlip];
-
-                    if (isConnectedPawn(static_cast<Side>(side), pos))
-                        pawnScore[side] += bonusConnectedPassedPawn;
-
-                    const int   frontSq = pos + pushOff;
-                    const Piece frontPce = pieceTable[frontSq];
-                    if (frontPce != Piece::any) {
-                        pawnScore[side] -= ((1ULL << frontSq) & pieceBB[op][Piece::any])
-                            ? penaltyPasserBlockedByEnemy
-                            : penaltyPasserBlockedBySelf;
-                        pawnScore[side] -= penaltyBlockedPasserByRank[rankFlip];
-                    }
-
-                    if (rankFlip >= 4) {
-                        if (arrAfterPawn[op][pos] & pieceBB[side][Piece::rook])
-                            pawnScore[side] += bonusRookSupportPasser;
-                        if (arrAfterPawn[side][pos] & pieceBB[op][Piece::rook])
-                            pawnScore[side] -= penaltyEnemyRookBlockPasser;
-                    }
-                    if (rankFlip >= 5 && (arrAfterPawn[side][pos] & pieceBB[op][Piece::any]))
-                        pawnScore[side] -= penaltyHasBlockade;
-                    if (filePawn == 0 || filePawn == 7)
-                        pawnScore[side] += bonusOutsidePasser;
-
-                }
-                else if (!isolated) {
-                    const uint64_t adj = arrNeighorPawn[pos] & myBB;
-                    if ((adj & ~arrFrontPawn[side][pos]) == 0) {
-                        if (arrPawnAttacks[side][pos + pushOff] & pieceBB[op][Piece::pawn])
-                            pawnScore[side] -= pawnBackwardPenalty;
-                    }
-                }
-            }
-
-            // ── Promo-square king distances (EG, outside cache) ─────────────
-            if (passed) {
-                const int rankFlip = (side == 1) ? (7 - rankPawn) : rankPawn;
-                const int promFile = filePawn;
-                const int promRank = (side == 0) ? 7 : 0;
-                const int opDistPromo = std::max(abs(posToFile(kingPos[op]) - promFile),
-                    abs(posToRank(kingPos[op]) - promRank));
-                const int myDistPromo = std::max(abs(posToFile(kingPos[side]) - promFile),
-                    abs(posToRank(kingPos[side]) - promRank));
-                score[side] += opDistPromo * promoDistOpWeight;
-                score[side] -= myDistPromo * promoDistMyWeight;
-            }
-
-            // ── King–pawn tropism ────────────────────────────────────────────
-            const int weight = passed ? 6 : 3;
-            const int mDist = abs(rankKing[side] - rankPawn) + abs(fileKing[side] - filePawn);
-            totalWeightedKingDistToOwnPawn[side] += weight * mDist;
-            sumOfWeightDist[side] += weight;
-
-            // ── King attack contribution ─────────────────────────────────────
-            const uint64_t atkSq = arrPawnAttacks[side][pos];
-            const int nAtksI = popcount64(atkSq & opInner[side]);
-            const int nAtksO = popcount64(atkSq & opOuter[side]);
-            if (nAtksI) nAtk20[side] += 10;   // 0.50 × 20
-            else if (nAtksO) nAtk20[side] += 5;   // 0.25 × 20
-            totalAtkUnits[side] += nAtksI * 2 + nAtksO;
-
-            if (isSTM && (atkSq & allPieces[op]))
-                score[side] += bonusThreatOnHigherValuePiece[1];
-        }
-    }
-
-    // ── KNIGHTS ──────────────────────────────────────────────────────────────
-    // Tables touched: knightTable, getKnightAttackSquares (magic/array),
-    //                 arrPawnAttacks, arrFrontPawn, arrNeighorPawn
-    for (int side = 0; side < 2; side++) {
-        const int      op = side ^ 1;
-        const int      flip = (side == 0) ? 56 : 0;
-        const bool     isSTM = (side == (int)stm);
-        const uint64_t myBB = pieceBB[side][Piece::any];
-
-        uint64_t bb = pieceBB[side][Piece::knight];
-        while (bb) {
-            const int pos = BitScanForward64(bb);
-            bb &= bb - 1;
-
-            --phase;
-            score[side] += materialValue[Piece::knight];
-            score[side] += knightTable[pos ^ flip];
-
-            const uint64_t atkSq = getKnightAttackSquares(pos) & ~myBB;
-            const int nAtksI = popcount64(atkSq & opInner[side]);
-            const int nAtksO = popcount64(atkSq & opOuter[side]);
-            if (nAtksI) nAtk20[side] += 20;   // 1.0 × 20
-            else if (nAtksO) nAtk20[side] += 10;   // 0.5 × 20
-            totalAtkUnits[side] += nAtksI * 3 + nAtksO * 2;
-
-            if (isSTM && (atkSq & allHeavyPieces[op]))
-                score[side] += bonusThreatOnHigherValuePiece[1];
-
-            // Outpost
-            if ((arrPawnAttacks[op][pos] & pieceBB[side][Piece::pawn]) &&
-                !(pieceBB[op][Piece::pawn] & arrFrontPawn[side][pos] & arrNeighorPawn[pos]))
-                score[side] += bonusOutpostKnight;
-
-            const int mob = popcount64(atkSq & ~opPawnAttacks[side]);
-            score[side] += mob * mobilityValue[Piece::knight];
-            if (mob == 0)
-                score[side] -= penaltyNoMobility[Piece::knight];
-        }
-    }
-
-    // ── BISHOPS ──────────────────────────────────────────────────────────────
-    // Tables touched: bishopTable, getBishopAttackSquares (magic),
-    //                 arrPawnAttacks, arrFrontPawn, arrNeighorPawn
-    for (int side = 0; side < 2; side++) {
-        const int      op = side ^ 1;
-        const int      flip = (side == 0) ? 56 : 0;
-        const bool     isSTM = (side == (int)stm);
-        const uint64_t myBB = pieceBB[side][Piece::any];
-
-        if (popcount64(pieceBB[side][Piece::bishop]) == 2)
-            score[side] += bishopPairBonus;
-
-        uint64_t bb = pieceBB[side][Piece::bishop];
-        while (bb) {
-            const int pos = BitScanForward64(bb);
-            bb &= bb - 1;
-
-            --phase;
-            score[side] += materialValue[Piece::bishop];
-            score[side] += bishopTable[pos ^ flip];
-
-            const uint64_t atkSq = getBishopAttackSquares(occupied, pos) & ~myBB;
-            const int nAtksI = popcount64(atkSq & opInner[side]);
-            const int nAtksO = popcount64(atkSq & opOuter[side]);
-            if (nAtksI) nAtk20[side] += 20;
-            else if (nAtksO) nAtk20[side] += 10;
-            totalAtkUnits[side] += nAtksI * 3 + nAtksO * 2;
-
-            if (isSTM && (atkSq & allHeavyPieces[op]))
-                score[side] += bonusThreatOnHigherValuePiece[1];
-
-            // Outpost
-            if ((arrPawnAttacks[op][pos] & pieceBB[side][Piece::pawn]) &&
-                !(pieceBB[op][Piece::pawn] & arrFrontPawn[side][pos] & arrNeighorPawn[pos]))
-                score[side] += bonusOutpostBishop;
-
-            // Bad bishop: own pawns on same-color squares
-            const bool     onLight = (posToFile(pos) + posToRank(pos)) % 2 == 0;
-            const uint64_t sameColor = onLight ? 0x55AA55AA55AA55AAULL
-                : 0xAA55AA55AA55AA55ULL;
-            score[side] -= popcount64(pieceBB[side][Piece::pawn] & sameColor) * penaltyBadBishop;
-
-            score[side] += popcount64(atkSq & ~opPawnAttacks[side]) * mobilityValue[Piece::bishop];
-        }
-    }
-
-    // ── ROOKS ────────────────────────────────────────────────────────────────
-    // Tables touched: rookTable, getRookAttackSquares (magic),
-    //                 arrAfterPawn, pawnSet
-    for (int side = 0; side < 2; side++) {
-        const int      op = side ^ 1;
-        const int      flip = (side == 0) ? 56 : 0;
-        const bool     isSTM = (side == (int)stm);
-        const uint64_t myBB = pieceBB[side][Piece::any];
-        const int      rank7 = (side == 0) ? 6 : 1;
-        const int      rank8 = (side == 0) ? 7 : 0;
-        const uint64_t r7mask = 0xFFULL << (rank7 * 8);
-
-        uint64_t bb = pieceBB[side][Piece::rook];
-        while (bb) {
-            const int pos = BitScanForward64(bb);
-            bb &= bb - 1;
-
-            phase -= 2;
-            score[side] += materialValue[Piece::rook];
-            score[side] += rookTable[pos ^ flip];
-
-            // Open / semi-open file
-            if (!(arrAfterPawn[side][pos] & pawnSet))
-                score[side] += bonusRookOnOpenFile;
-            else if (!(arrAfterPawn[side][pos] & pieceBB[side][Piece::pawn]))
-                score[side] += bonusRookOnSemiOpenFile;
-
-            // Rook on 7th rank
-            if (posToRank(pos) == rank7) {
-                if ((pieceBB[op][Piece::pawn] & r7mask) || posToRank(kingPos[op]) == rank8) {
-                    score[side] += bonusRookOn7th;
-                    if (pieceBB[side][Piece::rook] & r7mask & ~(1ULL << pos))
-                        score[side] += bonusRookOn7thWithAnother;
-                }
-            }
-
-            // Connected rooks (only the lower-indexed rook pays the bonus)
-            const uint64_t otherRooks = pieceBB[side][Piece::rook] & ~(1ULL << pos);
-            if (otherRooks && BitScanForward64(pieceBB[side][Piece::rook]) == pos) {
-                if (getRookAttackSquares(occupied, pos) & otherRooks)
-                    score[side] += bonusConnectedRooks;
-            }
-
-            const uint64_t atkSq = getRookAttackSquares(occupied, pos) & ~myBB;
-            const int nAtksI = popcount64(atkSq & opInner[side]);
-            const int nAtksO = popcount64(atkSq & opOuter[side]);
-            if (nAtksI) nAtk20[side] += 20;
-            else if (nAtksO) nAtk20[side] += 10;
-            totalAtkUnits[side] += nAtksI * 4 + nAtksO * 3;
-
-            if (isSTM && (atkSq & pieceBB[op][Piece::queen]))
-                score[side] += bonusThreatOnHigherValuePiece[1];
-
-            score[side] += popcount64(atkSq & ~opPawnAttacks[side]) * mobilityValue[Piece::rook];
-        }
-    }
-
-    // ── QUEENS ───────────────────────────────────────────────────────────────
-    // Tables touched: queenTable, getRookAttackSquares + getBishopAttackSquares
-    for (int side = 0; side < 2; side++) {
-        const int      op = side ^ 1;
-        const int      flip = (side == 0) ? 56 : 0;
-        const uint64_t myBB = pieceBB[side][Piece::any];
-
-        uint64_t bb = pieceBB[side][Piece::queen];
-        while (bb) {
-            const int pos = BitScanForward64(bb);
-            bb &= bb - 1;
-
-            phase -= 4;
-            score[side] += materialValue[Piece::queen];
-            score[side] += queenTable[pos ^ flip];
-
-            const uint64_t atkSq = (getRookAttackSquares(occupied, pos)
-                | getBishopAttackSquares(occupied, pos)) & ~myBB;
-            const int nAtksI = popcount64(atkSq & opInner[side]);
-            const int nAtksO = popcount64(atkSq & opOuter[side]);
-            if (nAtksI) nAtk20[side] += 40;  // 2.0 × 20
-            else if (nAtksO) nAtk20[side] += 20;  // 1.0 × 20
-            totalAtkUnits[side] += nAtksI * 5 + nAtksO * 4;
-
-            score[side] += popcount64(atkSq & ~opPawnAttacks[side]) * mobilityValue[Piece::queen];
-        }
-    }
-
-    // ── KINGS ────────────────────────────────────────────────────────────────
-    // Tables touched: kingTable, getKingAttackSquares
-    for (int side = 0; side < 2; side++) {
-        const int      flip = (side == 0) ? 56 : 0;
-        const uint64_t myBB = pieceBB[side][Piece::any];
-
-        const int pos = kingPos[side];
-        score[side] += kingTable[pos ^ flip];
-
-        const uint64_t atkSq = getKingAttackSquares(pos) & ~myBB & ~opPawnAttacks[side];
-        const int mob = popcount64(atkSq);
-        score[side] += mob * mobilityValue[Piece::king];
-        if (mob == 0)
-            score[side] -= penaltyNoMobility[Piece::king];
-    }
-
-    // ── SPACE ─────────────────────────────────────────────────────────────────
-    for (int side = 0; side < 2; side++) {
-        const uint64_t myPawns = pieceBB[side][Piece::pawn];
-
-        uint64_t spaceMask;
-        if (side == 0) {            // White: forward is +8 => << 8
-            spaceMask = myPawns << 8;
-            spaceMask |= spaceMask << 8;
-            spaceMask |= spaceMask << 16;
-            spaceMask |= spaceMask << 32;
-        }
-        else {                    // Black: forward is -8 => >> 8
-            spaceMask = myPawns >> 8;
-            spaceMask |= spaceMask >> 8;
-            spaceMask |= spaceMask >> 16;
-            spaceMask |= spaceMask >> 32;
-        }
-
-        // central files/ranks mask (your original)
-        spaceMask &= 0x003C3C3C3C3C3C00ULL;
-
-        // strongly recommended: count only empty space
-        spaceMask &= ~occupied;
-
-        // don’t count squares controlled by enemy pawns
-        spaceMask &= ~opPawnAttacks[side];
-
-        score[side] += popcount64(spaceMask) * bonusSpacePerSquare;
-    }
-
-    // ── KING SAFETY ───────────────────────────────────────────────────────────
-    // Finalise attacker danger and structural king-shelter penalties.
-    for (int side = 0; side < 2; side++) {
-        // Danger: attackers outweigh defenders → apply SafetyTable penalty
-        if (nAtk20[side] > 0) {
-            const int danger20 = nAtk20[side] - nDef20[side];
-            if (danger20 > 0)
-                rawKingSafety[side] = SafetyTable[totalAtkUnits[side]] * danger20 / 20;
-        }
-
-        // Pawn shelter around king
-        const int kp = kingPos[side];
-        const int kf = fileKing[side];
-        const int nPawnsSurround = popcount64(getKingAttackSquares(kp) & pieceBB[side][Piece::pawn]);
-
-        const bool missingCenter = !(arrAfterPawn[side][kp] & pieceBB[side][Piece::pawn]);
-        const bool missingRight = (kf < 7) && !(arrAfterPawn[side][kp + 1] & pieceBB[side][Piece::pawn]);
-        const bool missingLeft = (kf > 0) && !(arrAfterPawn[side][kp - 1] & pieceBB[side][Piece::pawn]);
-
-        int nSemiOpen;
-        if (kf == 0) nSemiOpen = missingCenter + missingRight;
-        else if (kf == 7) nSemiOpen = missingCenter + missingLeft;
-        else              nSemiOpen = missingCenter + missingLeft + missingRight;
-
-        score[side] += nPawnsSurround * bonusPawnSurroundKing;
-        score[side] -= semiOpenFilesPenalty[nSemiOpen];
-    }
-
-    // ── PAWN CACHE WRITEBACK ──────────────────────────────────────────────────
-    if (!pawnCacheHit)
-        storePawnHash(pawnHash, pawnScore);
-    score[0] += pawnScore[0];
-    score[1] += pawnScore[1];
-
-    // ── PHASE TAPERING ────────────────────────────────────────────────────────
-    phase = (phase * 256 + (TOTAL_PHASE / 2)) / TOTAL_PHASE;
-
-    score[0] += rawKingSafety[0];
-    score[1] += rawKingSafety[1];
-
-    // ── KING–PAWN TROPISM ─────────────────────────────────────────────────────
-    if (sumOfWeightDist[0] > 0)
-        score[0] -= (totalWeightedKingDistToOwnPawn[0] / sumOfWeightDist[0]) * kingPawnTropismFactor;
-    if (sumOfWeightDist[1] > 0)
-        score[1] -= (totalWeightedKingDistToOwnPawn[1] / sumOfWeightDist[1]) * kingPawnTropismFactor;
-
-    score[(int)stm] += tempo;
-
-    // ── FINAL BLEND (MG/EG taper + pawn scaling) ──────────────────────────────
-    const int strongerSide = (score[0] < score[1]) ? 1 : 0;
-    const int pawnsMissing = 8 - (int)popcount64(pieceBB[strongerSide][Piece::pawn]);
-    const int scaleNum = 128 - pawnsMissing * pawnsMissing;  // /128 denominator
-
-    const int eval = score[0] - score[1];
-    const int mg = (short)eval;
-    const int eg = (eval + 0x8000) >> 16;
-
-    // (mg*(256-phase) + eg*scaleNum*phase/128) / 256
-    int ans = (mg * (256 - phase) + eg * scaleNum * phase / 128) / 256;
-
-    if (halve)
-        ans >>= 1;
-
-    // ── MOP-UP EVAL (pawnless endgame) ───────────────────────────────────────
-    // 4.7f → 47/10, 1.6f → 16/10, combined into one integer division
-    if ((pieceBB[0][Piece::pawn] | pieceBB[1][Piece::pawn]) == 0) {
-        const int distBetween = abs(fileKing[0] - fileKing[1]) + abs(rankKing[0] - rankKing[1]);
-        if (ans >= 0)
-            ans += (47 * arrCenterManhattanDistance[kingPos[1]] + 16 * (14 - distBetween)) / 10;
-        else
-            ans -= (47 * arrCenterManhattanDistance[kingPos[0]] + 16 * (14 - distBetween)) / 10;
-    }
-
-    return ans * who2move * 100;
+    if (!g_nnue_networks) return 0;
+    
+    Stockfish::Position pos(this);
+    Stockfish::Eval::NNUE::AccumulatorCaches& caches = *g_nnue_caches;
+    
+    int eval = Stockfish::Eval::evaluate(*g_nnue_networks, pos, g_nnue_acc, caches, 0);
+    return eval*25;
 }
+
+    

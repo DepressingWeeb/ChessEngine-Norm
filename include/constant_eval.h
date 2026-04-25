@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-constexpr int S(const int mg,const int eg)
+constexpr int S(const int mg, const int eg)
 {
     return static_cast<int>(static_cast<uint32_t>(eg) << 16) + mg;
 }

@@ -1,6 +1,16 @@
 #pragma once
 #include <stdint.h>
 #include <intrin.h>
+#include <map>
+#include <string>
+
+#ifdef my_BitScanForward64
+#undef my_BitScanForward64
+#endif
+
+#ifdef my_BitScanReverse64
+#undef my_BitScanReverse64
+#endif
 const int index64[64] = {
     0, 47,  1, 56, 48, 27,  2, 60,
    57, 49, 41, 37, 28, 16,  3, 61,
@@ -47,11 +57,11 @@ static std::map<int, std::string> indexToSquare = {
     {56, "a8"}, {57, "b8"}, {58, "c8"}, {59, "d8"},
     {60, "e8"}, {61, "f8"}, {62, "g8"}, {63, "h8"}
 };
-inline int BitScanForward64(uint64_t x) {
+inline int my_BitScanForward64(uint64_t x) {
     return index64[((x ^ (x - 1)) * 0x03f79d71b4cb0a89) >> 58];
 }
 
-inline int BitScanReverse64(uint64_t x) {
+inline int my_BitScanReverse64(uint64_t x) {
 #if defined(_MSC_VER)
     unsigned long index;
     _BitScanReverse64(&index, x);

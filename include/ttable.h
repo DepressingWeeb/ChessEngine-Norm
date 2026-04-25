@@ -1,5 +1,5 @@
 #pragma once
-#include "types.h"
+#include "chess_types.h"
 #include <stdlib.h>
 #include <iostream>
 #include <nmmintrin.h>

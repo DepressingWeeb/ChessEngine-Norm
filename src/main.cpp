@@ -10,7 +10,30 @@
 #include <random>
 #include <algorithm>
 #include "constant_search.h"
-#include "bitboard.h"
+#include "mybitboard.h"
+#include "../Stockfish/src/evaluate.h"
+#include "../Stockfish/src/nnue/network.h"
+#include "../Stockfish/src/bitboard.h"
+
+Stockfish::Eval::NNUE::Networks* g_nnue_networks = nullptr;
+thread_local Stockfish::Eval::NNUE::AccumulatorCaches* g_nnue_caches = nullptr;
+extern thread_local Stockfish::Eval::NNUE::AccumulatorStack g_nnue_acc;
+
+void initNNUE() {
+    Stockfish::Bitboards::init();
+    if (!g_nnue_networks) {
+        g_nnue_networks = new Stockfish::Eval::NNUE::Networks(
+            Stockfish::Eval::NNUE::NetworkBig({ EvalFileDefaultNameBig, "None", "" }, Stockfish::Eval::NNUE::EmbeddedNNUEType::BIG),
+            Stockfish::Eval::NNUE::NetworkSmall({ EvalFileDefaultNameSmall, "None", "" }, Stockfish::Eval::NNUE::EmbeddedNNUEType::SMALL));
+        g_nnue_networks->big.load("D:\\source\\repos\\ChessAI2\\x64\\Release\\", EvalFileDefaultNameBig);
+        g_nnue_networks->small.load("D:\\source\\repos\\ChessAI2\\x64\\Release\\", EvalFileDefaultNameSmall);
+        g_nnue_caches = new Stockfish::Eval::NNUE::AccumulatorCaches(*g_nnue_networks);
+        std::function<void(std::string_view)> onVerifyNetworks;
+        g_nnue_networks->big.verify(EvalFileDefaultNameBig, std::function<void(std::string_view)>());
+        g_nnue_networks->small.verify(EvalFileDefaultNameSmall, std::function<void(std::string_view)>());
+        
+    }
+}
 #include <thread>
 #include <unordered_map>
 #include <functional>
@@ -128,6 +151,9 @@ void ChessEngine::addMove(Move move) {
     uint64_t lastPosHash = hashMoveHistory[hashMoveHistory.size() - 1];
     uint64_t currPosHash = bb.move(move, lastPosHash);
     hashMoveHistory.push_back(currPosHash);
+    if (g_nnue_networks) {
+        g_nnue_acc.reset();
+    }
 }
 
 void ChessEngine::undoMove(Move move) {
@@ -731,7 +757,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         }
     }
 
-
+    /*
     if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && bb.isNullMoveEnable() && beta > -9e8) {
         Move nullMove = Move();
         uint64_t newHash = bb.move(nullMove, zHash);
@@ -746,6 +772,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             return abs(evalNullMove) > 9e8 ? beta : evalNullMove;
         }
     }
+    */
     // ProbCut
     if (!isPVNode && !isKingInCheck && depth >= probCutDepthLimit && abs(beta) < 900000000) {
         int probCutBeta = beta + probCutBetaMargin;
@@ -1593,6 +1620,12 @@ int ChessEngine::searchDebug(BitBoard& bb, SearchStack* const ss, int depth, int
 }
 
 int ChessEngine::iterativeDeepening(int startDepth, int timeLeft, int moveTime, int movesToGo) {
+    if (g_nnue_networks) {
+        if (!g_nnue_caches) {
+            g_nnue_caches = new Stockfish::Eval::NNUE::AccumulatorCaches(*g_nnue_networks);
+        }
+        g_nnue_acc.reset();
+    }
     //time management
     int time;
     if (timeLeft == -1) {
@@ -2288,6 +2321,7 @@ void uciCommunication()
 
 }
 int main(int argn, char** argv) {
+    initNNUE();
     //tb_init((PATH + "syzygy").c_str());
     //testMoveGen();
     //testMoveSorting();
