@@ -217,11 +217,89 @@ void BitBoard::parseFEN(std::string fen) {
     if (v.size() > 4) {
         halfMoves = stoi(v[4]);
     }
+    else {
+        halfMoves = 0;
+    }
     if (v.size() > 5) {
         fullMoves = stoi(v[5]);
     }
+    else {
+        fullMoves = 1;
+    }
+    
     repetitionTable.add(getCurrentPositionHash(), false);
 
+}
+
+std::string BitBoard::toFEN() {
+    std::string fen = "";
+    for (int rank = 7; rank >= 0; rank--) {
+        int emptyCount = 0;
+
+        for (int file = 0; file < 8; file++) {
+            int pos = rank * 8 + file;
+            Piece p = pieceTable[pos];
+            if (p == Piece::any) {
+                emptyCount++;
+            }
+            else {
+                if (emptyCount > 0) {
+                    fen += std::to_string(emptyCount);
+                    emptyCount = 0;
+                }
+                char pieceChar;
+                switch (p) {
+                case Piece::pawn:   pieceChar = 'p'; break;
+                case Piece::knight: pieceChar = 'n'; break;
+                case Piece::bishop: pieceChar = 'b'; break;
+                case Piece::rook:   pieceChar = 'r'; break;
+                case Piece::queen:  pieceChar = 'q'; break;
+                case Piece::king:   pieceChar = 'k'; break;
+                default:            pieceChar = '?'; break;
+                }
+                if (pieceBB[Side::White][Piece::any] & (1ull << pos)) {
+                    pieceChar = toupper(pieceChar);
+                }
+                fen += pieceChar;
+            }
+        }
+        if (emptyCount > 0) {
+            fen += std::to_string(emptyCount);
+        }
+        if (rank > 0) {
+            fen += "/";
+        }
+    }
+    fen += " ";
+    fen += isWhiteTurn ? "w" : "b";
+    fen += " ";
+    std::string castling = "";
+    if (castingRight[Side::White][0]) castling += "K";
+    if (castingRight[Side::White][1]) castling += "Q";
+    if (castingRight[Side::Black][0]) castling += "k";
+    if (castingRight[Side::Black][1]) castling += "q";
+    if (castling.empty()) {
+        fen += "-";
+    }
+    else {
+        fen += castling;
+    }
+    // 4. En passant target square
+    fen += " ";
+    if (enPassantPos != 0) {
+        char fileChar = 'a' + (enPassantPos % 8);
+        char rankChar = '1' + (enPassantPos / 8);
+        fen += fileChar;
+        fen += rankChar;
+    }
+    else {
+        fen += "-";
+    }
+    fen += " ";
+    fen += std::to_string(halfMoves);
+    fen += " ";
+    fen += std::to_string(fullMoves);
+    return fen;
 }
 void BitBoard::initConstant() {
     //init arrPawnAttcks that contains the attack squres of pawn precomputed
@@ -447,7 +525,7 @@ int BitBoard::isSquareAttacked(uint64_t occupied, int pos, Side side) {
     uint64_t king = pieceBB[side][Piece::king];
     uint64_t bishopsQueens = pieceBB[side][queen] | pieceBB[side][Piece::bishop];
     uint64_t rooksQueens = pieceBB[side][Piece::queen] | pieceBB[side][Piece::rook];
-    return !!(arrPawnAttacks[!side][pos] & pawns) + !!(arrKnightAttacks[pos] & knights) + !!(getBishopAttackSquares(occupied, pos) & bishopsQueens) + !!(getRookAttackSquares(occupied, pos) & rooksQueens);
+    return popcount64(arrPawnAttacks[!side][pos] & pawns) + popcount64(arrKnightAttacks[pos] & knights) + popcount64(getBishopAttackSquares(occupied, pos) & bishopsQueens) + popcount64(getRookAttackSquares(occupied, pos) & rooksQueens);
 }
 
 uint64_t BitBoard::getAttackersOfSq(uint64_t occupied, int pos) {
@@ -577,13 +655,16 @@ uint64_t BitBoard::getSingleCheckInterposingSquares(uint64_t occ, int kingPos, S
         int checkingPieceIndex = BitScanForward64(maskCheckingPieceRook);
         return arrRectangular[kingPos][checkingPieceIndex];
     }
+    return 0;
 }
 
 uint64_t BitBoard::move(Move& move, uint64_t zHash) {
     moveNum++;
-    assert(moveNum >= 0);
+    assert(moveNum >= 0 && moveNum < 2048);
+    halfMoveHistory[moveNum] = halfMoves;
     Side sideToMove = move.getSideToMove();
     if (move.isNullMove()) {
+        halfMoves++;
         sideToMove = isWhiteTurn ? Side::White : Side::Black;
         move.setSideToMove(sideToMove);
         move.setCastleRightBefore(castingRight[sideToMove][0], castingRight[sideToMove][1]);
@@ -592,6 +673,7 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
             zHash ^= randomHash.enPassantRand[enPassantPos];
         }
         enPassantPos = 0;
+        if (!isWhiteTurn) fullMoves++;
         isWhiteTurn = !isWhiteTurn;
         zHash ^= randomHash.sideMoving;
         repetitionTable.add(zHash, true);
@@ -602,6 +684,18 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
     MoveType moveType = move.getMoveType();
     int startPos = move.getStartPos();
     int endPos = move.getEndPos();
+    bool isCapture = (moveType == MoveType::CAPTURE ||
+        moveType == MoveType::EN_PASSANT ||
+        moveType == MoveType::PROMOTION_BISHOP_AND_CAPTURE ||
+        moveType == MoveType::PROMOTION_KNIGHT_AND_CAPTURE ||
+        moveType == MoveType::PROMOTION_QUEEN_AND_CAPTURE ||
+        moveType == MoveType::PROMOTION_ROOK_AND_CAPTURE);
+    if (movePiece == Piece::pawn || isCapture) {
+        halfMoves = 0;
+    }
+    else {
+        halfMoves++;
+    }
     move.setCastleRightBefore(castingRight[sideToMove][0], castingRight[sideToMove][1]);
     move.setEnpassantPosBefore(enPassantPos);
     if (enPassantPos != 0) {
@@ -807,6 +901,7 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
         break;
 
     }
+    if (!isWhiteTurn) fullMoves++;
     isWhiteTurn = !isWhiteTurn;
     zHash ^= randomHash.sideMoving;
     repetitionTable.add(zHash, moveType > 0 || movePiece == Piece::pawn);
@@ -814,6 +909,7 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
 }
 
 void BitBoard::undoMove(Move& move) {
+    halfMoves = halfMoveHistory[moveNum];
     moveNum--;
     assert(moveNum >= 0);
     Side sideToMove = move.getSideToMove();
@@ -821,6 +917,7 @@ void BitBoard::undoMove(Move& move) {
         castingRight[sideToMove][0] = move.getCastleRightBefore(0);
         castingRight[sideToMove][1] = move.getCastleRightBefore(1);
         enPassantPos = move.getEnpassantPosBefore();
+        if (isWhiteTurn) fullMoves--;
         isWhiteTurn = !isWhiteTurn;
         repetitionTable.pop();
         return;
@@ -980,6 +1077,7 @@ void BitBoard::undoMove(Move& move) {
         break;
 
     }
+    if (isWhiteTurn) fullMoves--;
     isWhiteTurn = !isWhiteTurn;
     repetitionTable.pop();
 }
@@ -2199,7 +2297,7 @@ bool BitBoard::isValidMove(Move& move) {
         break;
     case MoveType::CAPTURE:
 
-        return pieceTable[startPos] == movePiece && pieceTable[endPos] == capturePiece;
+        return pieceTable[startPos] == movePiece && pieceTable[endPos] == capturePiece && pieceTable[endPos] != Piece::king;
         break;
     case MoveType::EN_PASSANT:
     {
@@ -2949,6 +3047,10 @@ int BitBoard::evaluate(int alpha, int beta) {
         else
             ans -= (47 * arrCenterManhattanDistance[kingPos[0]] + 16 * (14 - distBetween)) / 10;
     }
-
+    if (halfMoves > 0) {
+        int scale = 100 - halfMoves;
+        if (scale < 0) scale = 0;
+        ans = (ans * scale) / 100;
+    }
     return ans * who2move * 100;
 }

@@ -39,6 +39,7 @@ private:
         uint64_t castlingRight[2][2];
         uint64_t sideMoving;
     } randomHash;
+    int halfMoveHistory[2048];
 public:
     std::map<std::string, uint64_t> debugPerft;
     RepetitionTable repetitionTable;
@@ -174,6 +175,7 @@ public:
 
     void initConstant();
     void parseFEN(std::string fen);
+    std::string toFEN();
     uint64_t move(Move& move, uint64_t zHash = 0);
     void undoMove(Move& move);
     std::vector<Move> getLegalMoves();
