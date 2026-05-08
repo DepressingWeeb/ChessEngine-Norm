@@ -15,7 +15,7 @@
 #include <unordered_map>
 #include <functional>
 #include "chessengine.h"
-
+#include "nnue.h"
 class MultithreadChessEngine {
 private:
     std::vector<std::thread>threads;
@@ -39,6 +39,7 @@ public:
             engines[i].parseFEN(fen);
         }
         isWhiteTurn = engines[0].bb.isWhiteTurn;
+
     }
 
     void parseMoves(std::vector<std::string> moves) {
@@ -157,17 +158,13 @@ enum class command
     move_time,
     infinite
 };
-// --- Macros to reduce boilerplate ---
 #define REG_INT(m, name, target)   m[name]       = [](int v){ target = v; }
 #define REG_SMG(m, name, target)   m[name "Mg"]  = [](int v){ setMg(target, v); }
 #define REG_SEG(m, name, target)   m[name "Eg"]  = [](int v){ setEg(target, v); }
 #define REG_S(m, name, target)     REG_SMG(m, name, target); REG_SEG(m, name, target)
 
-// --- Build option map once (static) ---
 static std::unordered_map<std::string, std::function<void(int)>> buildOptionMap() {
     std::unordered_map<std::string, std::function<void(int)>> m;
-
-    // ── Existing search params ──────────────────────────────────────────────
     REG_INT(m, "LMP1", quietsToCheckTable[1]);
     REG_INT(m, "LMP2", quietsToCheckTable[2]);
     REG_INT(m, "LMP3", quietsToCheckTable[3]);
@@ -199,27 +196,26 @@ static std::unordered_map<std::string, std::function<void(int)>> buildOptionMap(
     REG_INT(m, "futilityMargin", futilityMargin);
     REG_INT(m, "futilityDepthLimit", futilityDepthLimit);
     REG_INT(m, "SEEMargin", SEEMargin);
-    // LMR params need /100 scaling — keep as special lambdas
+    REG_INT(m, "LMPImprovingBonusMove", LMPImprovingBonusMove);
     m["lmrDivMid"] = [](int v) { lmrDivMid = v / 100.f; };
     m["lmrBaseMid"] = [](int v) { lmrBaseMid = v / 100.f; };
     m["lmrDivEnd"] = [](int v) { lmrDivEnd = v / 100.f; };
     m["lmrBaseEnd"] = [](int v) { lmrBaseEnd = v / 100.f; };
 
-    // ── Eval: Material (Tier 1) ─────────────────────────────────────────────
+
     REG_S(m, "matPawn", materialValue[1]);
     REG_S(m, "matKnight", materialValue[2]);
     REG_S(m, "matBishop", materialValue[3]);
     REG_S(m, "matRook", materialValue[4]);
     REG_S(m, "matQueen", materialValue[5]);
 
-    // ── Eval: Mobility (Tier 1) ─────────────────────────────────────────────
     REG_S(m, "mobKnight", mobilityValue[2]);
     REG_S(m, "mobBishop", mobilityValue[3]);
     REG_S(m, "mobRook", mobilityValue[4]);
     REG_S(m, "mobQueen", mobilityValue[5]);
     REG_S(m, "mobKing", mobilityValue[6]);
 
-    // ── Eval: Passed pawn by rank (Tier 1) ─────────────────────────────────
+
     REG_S(m, "passedR1", bonusPassedPawnByRank[1]);
     REG_S(m, "passedR2", bonusPassedPawnByRank[2]);
     REG_S(m, "passedR3", bonusPassedPawnByRank[3]);
@@ -228,7 +224,7 @@ static std::unordered_map<std::string, std::function<void(int)>> buildOptionMap(
     REG_S(m, "passedR6", bonusPassedPawnByRank[6]);
     REG_S(m, "passedR7", bonusPassedPawnByRank[7]);
 
-    // ── Eval: Blocked passer by rank (Tier 2) ──────────────────────────────
+
     REG_S(m, "blockedPassedR1", penaltyBlockedPasserByRank[1]);
     REG_S(m, "blockedPassedR2", penaltyBlockedPasserByRank[2]);
     REG_S(m, "blockedPassedR3", penaltyBlockedPasserByRank[3]);
@@ -236,24 +232,22 @@ static std::unordered_map<std::string, std::function<void(int)>> buildOptionMap(
     REG_S(m, "blockedPassedR5", penaltyBlockedPasserByRank[5]);
     REG_S(m, "blockedPassedR6", penaltyBlockedPasserByRank[6]);
 
-    // ── Eval: Pawn structure (Tier 2) ───────────────────────────────────────
     REG_S(m, "pawnDouble", pawnDoublePenalty);
     REG_S(m, "pawnIsolated", pawnIsolatedPenalty);
     REG_S(m, "pawnBackward", pawnBackwardPenalty);
 
-    // ── Eval: King safety (Tier 3) ──────────────────────────────────────────
+
     REG_S(m, "semiOpenFile0", semiOpenFilesPenalty[0]);
     REG_S(m, "semiOpenFile1", semiOpenFilesPenalty[1]);
     REG_S(m, "semiOpenFile2", semiOpenFilesPenalty[2]);
     REG_S(m, "semiOpenFile3", semiOpenFilesPenalty[3]);
     REG_S(m, "pawnSurroundKing", bonusPawnSurroundKing);
 
-    // ── Eval: Piece bonuses (Tier 4) ────────────────────────────────────────
+
     REG_S(m, "bishopPair", bishopPairBonus);
     REG_S(m, "outpostKnight", bonusOutpostKnight);
     REG_S(m, "outpostBishop", bonusOutpostBishop);
 
-    // ── Eval: Passed pawn detail + Rooks (Tier 5) ───────────────────────────
     REG_S(m, "connectedPassed", bonusConnectedPassedPawn);
     REG_S(m, "passerBlockedByEnemy", penaltyPasserBlockedByEnemy);
     REG_S(m, "passerBlockedBySelf", penaltyPasserBlockedBySelf);
@@ -313,10 +307,13 @@ void uciCommunication()
             std::cout << "option name probCutBetaMargin type spin default 7000 min 1000 max 15000" << std::endl;  // ADDED
             std::cout << "option name probCutDepthLimit type spin default 5 min 1 max 10" << std::endl;           // ADDED
             std::cout << "option name LMPDepthLimit type spin default 4 min 1 max 8" << std::endl;                // ADDED
+            std::cout << "option name skipMovesQsearch type spin default 2 min 0 max 6" << std::endl;                // ADDED
+            std::cout << "option name deltaPruningMargin type spin default 20000 min 0 max 50000" << std::endl;                // ADDED
             std::cout << "option name LMP1 type spin default 5 min 2 max 8" << std::endl;
             std::cout << "option name LMP2 type spin default 7 min 3 max 11" << std::endl;
             std::cout << "option name LMP3 type spin default 14 min 7 max 21" << std::endl;
             std::cout << "option name LMP4 type spin default 29 min 15 max 40" << std::endl;
+            std::cout << "option name LMPImprovingBonusMove type spin default 5 min 0 max 50" << std::endl;
             // ── Eval: Material ──────────────────────────────────────────────────────────
             std::cout << "option name matPawnMg   type spin default 100  min 50   max 150" << std::endl;
             std::cout << "option name matPawnEg   type spin default 137  min 80   max 200" << std::endl;
@@ -537,6 +534,8 @@ int main(int argn, char** argv) {
     //tb_init((PATH + "syzygy").c_str());
     //testMoveGen();
     //testMoveSorting();
+    
+    load_nnue("D:\\source\\repos\\ChessEngine-Norm\\quantised_output_bucket.bin");
     //testEvaluation();
     uciCommunication();
 

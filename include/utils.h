@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
-#include <intrin.h>
+#include <map>
+#include <string>
+
 const int index64[64] = {
     0, 47,  1, 56, 48, 27,  2, 60,
    57, 49, 41, 37, 28, 16,  3, 61,

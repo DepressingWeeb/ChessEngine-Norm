@@ -4,6 +4,7 @@
 #include <vector>
 #include "utils.h"
 #include "constant_eval.h"
+#include "nnue.h"
 class BitBoard {
 private:
     int halfMoves;
@@ -40,6 +41,7 @@ private:
         uint64_t sideMoving;
     } randomHash;
     int halfMoveHistory[2048];
+    Accumulator accumulators[2048];
 public:
     std::map<std::string, uint64_t> debugPerft;
     RepetitionTable repetitionTable;
@@ -197,6 +199,7 @@ public:
     bool isThreat(const Move& move);
     bool SEE_GE(Move m, int threashold);
     int evaluate(int alpha, int beta);
+    int evaluateHCE(int alpha, int beta);
     int posToRank(int pos) {
         return pos >> 3;
     }

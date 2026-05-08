@@ -228,6 +228,13 @@ void BitBoard::parseFEN(std::string fen) {
     }
     
     repetitionTable.add(getCurrentPositionHash(), false);
+    accumulators[0].init();
+    for (int i = 0; i < 64; i++) {
+        if (pieceTable[i] != Piece::any) {
+            Side color = (pieceBB[Side::White][pieceTable[i]] & (1ULL << i)) ? Side::White : Side::Black;
+            accumulators[0].update_piece(pieceTable[i], color, i, true);
+        }
+    }
 
 }
 
@@ -659,6 +666,11 @@ uint64_t BitBoard::getSingleCheckInterposingSquares(uint64_t occ, int kingPos, S
 }
 
 uint64_t BitBoard::move(Move& move, uint64_t zHash) {
+    uint64_t oldWhite[7], oldBlack[7];
+    for (int p = 1; p <= 6; p++) {
+        oldWhite[p] = pieceBB[Side::White][p];
+        oldBlack[p] = pieceBB[Side::Black][p];
+    }
     moveNum++;
     assert(moveNum >= 0 && moveNum < 2048);
     halfMoveHistory[moveNum] = halfMoves;
@@ -900,6 +912,27 @@ uint64_t BitBoard::move(Move& move, uint64_t zHash) {
     default:
         break;
 
+    }
+    accumulators[moveNum].copy_from(accumulators[moveNum - 1]);
+
+    for (int p = 1; p <= 6; p++) {
+        // Compare White Pieces
+        uint64_t wDiff = oldWhite[p] ^ pieceBB[Side::White][p];
+        while (wDiff) {
+            int sq = BitScanForward64(wDiff);
+            bool isAdd = (pieceBB[Side::White][p] & (1ULL << sq)) != 0;
+            accumulators[moveNum].update_piece((Piece)p, Side::White, sq, isAdd);
+            wDiff &= wDiff - 1;
+        }
+
+        // Compare Black Pieces
+        uint64_t bDiff = oldBlack[p] ^ pieceBB[Side::Black][p];
+        while (bDiff) {
+            int sq = BitScanForward64(bDiff);
+            bool isAdd = (pieceBB[Side::Black][p] & (1ULL << sq)) != 0;
+            accumulators[moveNum].update_piece((Piece)p, Side::Black, sq, isAdd);
+            bDiff &= bDiff - 1;
+        }
     }
     if (!isWhiteTurn) fullMoves++;
     isWhiteTurn = !isWhiteTurn;
@@ -2519,7 +2552,7 @@ bool BitBoard::isEndgame() {
     //   rooks    → 2 each
     //   queens   → 4 each
     // TOTAL_PHASE is the starting value (full middlegame).
-    // When the remaining phase falls to ≤ 50% of TOTAL_PHASE, call it endgame.
+    // When the remaining phase falls to ≤ 1/3 of TOTAL_PHASE, call it endgame.
 
     int phase = TOTAL_PHASE;
 
@@ -2557,6 +2590,17 @@ void BitBoard::storePawnHash(uint64_t pawnHash, int score[2]) {
     entry.valid = true;
 }
 int BitBoard::evaluate(int alpha, int beta) {
+    Side stm = isWhiteTurn ? Side::White : Side::Black;
+    int piece_count = popcount64(pieceBB[Side::White][Piece::any] | pieceBB[Side::Black][Piece::any]);
+    int eval = evaluate_nnue(accumulators[moveNum], stm,piece_count);
+    if (halfMoves > 0) {
+        int scale = 100 - halfMoves;
+        eval = (eval * std::max(0, scale)) / 100;
+    }
+
+    return eval*25;
+}
+int BitBoard::evaluateHCE(int alpha, int beta) {
     uint64_t occupied = pieceBB[0][Piece::any] | pieceBB[1][Piece::any];
     const int who2move = isWhiteTurn ? 1 : -1;
     const int totalOcc = popcount64(occupied);

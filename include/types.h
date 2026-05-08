@@ -225,6 +225,7 @@ public:
     Move move;
     MoveVector moves;
     int movePriority[218];
+    int rawEval;
 };
 
 enum class NodeFlag :int {

@@ -1,3 +1,4 @@
+#pragma once
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -368,7 +369,7 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
         int endPos = moves[i].getEndPos();
         Side sideToMove = moves[i].getSideToMove();
         int priority = movePriority[i];
-        if (type == MoveType::CAPTURE && !isKingInCheck && !bb.SEE_GE(moves[i], 0)) {
+        if (type == MoveType::CAPTURE && !isKingInCheck && !bb.SEE_GE(moves[i], SEEMarginQSearch)) {
             continue;
         }
         bool isPawnEndgame = !((bb.pieceBB[Side::White][Piece::any] | bb.pieceBB[Side::Black][Piece::any]) ^ (bb.pieceBB[Side::White][Piece::pawn] | bb.pieceBB[Side::Black][Piece::pawn] | bb.pieceBB[Side::White][Piece::king] | bb.pieceBB[Side::Black][Piece::king]));
@@ -377,8 +378,8 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
 
 
         if (pruningCond1) {
-            if (pieceValue[moves[i].getCapturePiece()] * 100 + 20000 + bestScore < alpha) {
-                bestScore = std::max(bestScore, pieceValue[moves[i].getCapturePiece()] * 100 + 20000 + bestScore);
+            if (pieceValue[moves[i].getCapturePiece()] * 100 + deltaPruningMargin + bestScore < alpha) {
+                bestScore = std::max(bestScore, pieceValue[moves[i].getCapturePiece()] * 100 + deltaPruningMargin + bestScore);
                 continue;
             }
 
@@ -397,7 +398,7 @@ int ChessEngine::qSearch(BitBoard& bb, SearchStack* const ss, int alpha, int bet
                 continue;
 
             bool pruningCond2 = !(type == MoveType::NORMAL && bb.isThreat(moves[i]));
-            if (i > 2 && pruningCond2 && priority < 0)
+            if (i > skipMovesQsearch && pruningCond2 && priority < 0)
                 continue;
 
         }
@@ -434,7 +435,7 @@ int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss, int depth, 
     bool lmr = depth >= 3;
     int futilityVal = 0;
     int i;
-    int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + 5 : quietsToCheckTable[depth]) : 999;
+    int LMPLimit = depth <= 4 ? (improving ? quietsToCheckTable[depth] + LMPImprovingBonusMove : quietsToCheckTable[depth]) : 999;
     int quietMoves = 0;
     bool isRepeated = false;
     bool isEndgame = bb.isEndgame();
@@ -608,7 +609,7 @@ int ChessEngine::singularSearch(BitBoard& bb, SearchStack* const ss, int depth, 
 
 int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxDepth, int alpha, int beta, uint64_t zHash, int pliesFromRoot, bool isPV, bool canNullMove) {
     mainNodeCnt++;
-    if (pliesFromRoot > selDepth) selDepth = pliesFromRoot; // <--- Add this line
+    if (pliesFromRoot > selDepth) selDepth = pliesFromRoot;
     if ((mainNodeCnt & 0b1111111111) == 0b1111111111) {
         auto endTime = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - searchStartTime);
@@ -681,8 +682,8 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         }
     }
 
-    
-    if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > 4 && pliesFromRoot != 0 && bb.isNullMoveEnable() && beta > -9e8) {
+
+    if (staticEval >= beta && !isKingInCheck && !isPVNode && canNullMove && depth > nullMoveDepthLimit && pliesFromRoot != 0 && bb.isNullMoveEnable() && beta > -9e8) {
         Move nullMove = Move();
         uint64_t newHash = bb.move(nullMove, zHash);
         ss[pliesFromRoot].move = nullMove;
@@ -696,7 +697,7 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
             return abs(evalNullMove) > 9e8 ? beta : evalNullMove;
         }
     }
-    
+
     // ProbCut
     if (!isPVNode && !isKingInCheck && depth >= probCutDepthLimit && abs(beta) < 900000000) {
         int probCutBeta = beta + probCutBetaMargin;
@@ -708,15 +709,11 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
         for (int i = 0; i < probCutMoves.size(); i++) {
             selectionSort(probCutMoves, probCutPriority, i);
             MoveType pcMoveType = probCutMoves[i].getMoveType();
-            // Only consider captures that pass a quick SEE check
             if (!bb.SEE_GE(probCutMoves[i], (probCutBeta - staticEval) / 100))
                 continue;
             uint64_t pcHash = bb.move(probCutMoves[i], zHash);
             ss[pliesFromRoot].move = probCutMoves[i];
             if (!bb.isRepeatedPosition()) {
-                // Quick verification search at reduced depth
-
-                // After
                 int pcScore = -qSearch(bb, ss, -probCutBeta, -probCutBeta + 1, -1, 0, pliesFromRoot + 1);
                 if (pcScore >= probCutBeta)
                     pcScore = -search(bb, ss, depth - 4, maxDepth, -probCutBeta, -probCutBeta + 1, pcHash, pliesFromRoot + 1, false, false);
@@ -833,10 +830,10 @@ int ChessEngine::search(BitBoard& bb, SearchStack* const ss, int depth, int maxD
     moveOrdering(bb, ss, moves, pliesFromRoot, currBestMove, movePriority);
 
     Side opSide = sideToMove == Side::White ? Side::Black : Side::White;
-    bool lmr = !isPVNode && depth >= 3;
+    bool lmr = !isPVNode && depth >= lmrDepthLimit;
     int futilityVal = 0;
     int i;
-    int LMPLimit = depth <= LMPDepthLimit ? (improving ? quietsToCheckTable[depth] + 5 : quietsToCheckTable[depth]) : 999;
+    int LMPLimit = depth <= LMPDepthLimit ? (improving ? quietsToCheckTable[depth] + LMPImprovingBonusMove : quietsToCheckTable[depth]) : 999;
     int quietMoves = 0;
     for (i = 0; i < moves.size(); i++) {
         selectionSort(moves, movePriority, i);
